@@ -9,7 +9,6 @@ mod parser;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{Manager, State};
-use tauri_plugin_dialog::DialogExt;
 
 pub use engine::Engine;
 
@@ -125,8 +124,8 @@ fn set_filter(
 
 #[tauri::command]
 fn export_logs(
-    app_handle: tauri::AppHandle,
     engine: State<Arc<Engine>>,
+    file_path: String,
     filtered_only: bool,
 ) -> Result<(), String> {
     use std::io::Write;
@@ -145,20 +144,8 @@ fn export_logs(
         return Err("No log entries to export".into());
     }
 
-    let file_path = app_handle
-        .dialog()
-        .file()
-        .add_filter("Log", &["log", "txt"])
-        .set_file_name("logcat.log")
-        .blocking_save_file();
-
-    let Some(file_path) = file_path else {
-        return Ok(()); // User cancelled
-    };
-    let path_str = file_path.to_string();
-
     let mut file =
-        std::fs::File::create(&path_str).map_err(|e| format!("Failed to create file: {}", e))?;
+        std::fs::File::create(&file_path).map_err(|e| format!("Failed to create file: {}", e))?;
 
     for entry in &entries {
         let line = format!(

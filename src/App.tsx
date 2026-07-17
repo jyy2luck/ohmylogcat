@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import Toolbar from "./components/Toolbar";
 import FilterBar from "./components/FilterBar";
 import FindBar from "./components/FindBar";
@@ -83,7 +84,13 @@ function App() {
 
   const handleExport = useCallback(async () => {
     try {
-      await invoke("export_logs", { filteredOnly: true });
+      const filePath = await save({
+        defaultPath: "logcat.log",
+        filters: [{ name: "Log", extensions: ["log", "txt"] }],
+      });
+      if (!filePath) return;
+
+      await invoke("export_logs", { filePath, filteredOnly: true });
     } catch (e) {
       console.error("Export failed:", e);
     }
