@@ -152,7 +152,7 @@ export function useLogcat() {
   }, []);
 
   const scrollToEnd = useCallback(() => {
-    // Handled by LogList component
+    scrollToEndRef.current?.();
   }, []);
 
   const scrollToEndRef = useRef<(() => void) | null>(null);

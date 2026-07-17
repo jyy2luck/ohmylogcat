@@ -10,6 +10,8 @@ interface LogListProps {
   findQuery?: string;
   findMatches?: FindMatch[];
   currentMatchIndex?: number;
+  autoScrollToEnd?: boolean;
+  onAutoScrollToEndChange?: (enabled: boolean) => void;
   onScrollToEndRef?: (fn: () => void) => void;
 }
 
@@ -66,11 +68,11 @@ export default function LogList({
   findQuery = "",
   findMatches = [],
   currentMatchIndex = 0,
+  autoScrollToEnd = true,
+  onAutoScrollToEndChange,
   onScrollToEndRef,
 }: LogListProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
-  const isAtBottom = useRef(true);
-  const prevLength = useRef(0);
 
   const findActive = findQuery.trim().length > 0 && findMatches.length > 0;
 
@@ -86,24 +88,28 @@ export default function LogList({
       return;
     }
 
-    if (isAtBottom.current && entries.length > prevLength.current) {
-      virtuosoRef.current?.scrollToIndex(entries.length - 1);
-    }
-    prevLength.current = entries.length;
   }, [entries.length, findActive, findMatches, currentMatchIndex, findQuery]);
 
   const scrollToEnd = useCallback(() => {
-    isAtBottom.current = true;
-    virtuosoRef.current?.scrollToIndex(entries.length - 1);
+    if (entries.length === 0) return;
+    virtuosoRef.current?.scrollToIndex({
+      index: entries.length - 1,
+      align: "end",
+    });
   }, [entries.length]);
 
   useEffect(() => {
     onScrollToEndRef?.(scrollToEnd);
   }, [scrollToEnd, onScrollToEndRef]);
 
-  const handleScroll = useCallback((atBottom: boolean) => {
-    isAtBottom.current = atBottom;
-  }, []);
+  const handleScroll = useCallback(
+    (atBottom: boolean) => {
+      if (!atBottom && autoScrollToEnd) {
+        onAutoScrollToEndChange?.(false);
+      }
+    },
+    [autoScrollToEnd, onAutoScrollToEndChange]
+  );
 
   const nowrapMinWidth = useMemo(() => {
     if (softWrap || entries.length === 0) return undefined;
@@ -144,7 +150,7 @@ export default function LogList({
             className="h-full"
             totalCount={entries.length}
             atBottomStateChange={handleScroll}
-            followOutput={() => false}
+            followOutput={autoScrollToEnd && !findActive ? "auto" : false}
             increaseViewportBy={softWrap ? 400 : 200}
             itemContent={(index) => {
               const entry = entries[index];

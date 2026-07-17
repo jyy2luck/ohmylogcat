@@ -25,8 +25,11 @@ function App() {
     togglePause,
     clearLogs,
     scrollToEnd,
+    setScrollToEnd,
     updateFilter,
   } = useLogcat();
+
+  const [autoScrollToEnd, setAutoScrollToEnd] = useState(true);
 
   const { softWrap, toggleSoftWrap } = useSoftWrap();
   const find = useFindInLog(entries);
@@ -82,6 +85,15 @@ function App() {
     [updateFilter]
   );
 
+  const handleScrollToEndToggle = useCallback(() => {
+    if (autoScrollToEnd) {
+      setAutoScrollToEnd(false);
+    } else {
+      setAutoScrollToEnd(true);
+      scrollToEnd();
+    }
+  }, [autoScrollToEnd, scrollToEnd]);
+
   const handleExport = useCallback(async () => {
     try {
       const filePath = await save({
@@ -112,7 +124,8 @@ function App() {
         onDeviceChange={handleDeviceChange}
         onPauseToggle={togglePause}
         onClear={clearLogs}
-        onScrollToEnd={scrollToEnd}
+        autoScrollToEnd={autoScrollToEnd}
+        onScrollToEndToggle={handleScrollToEndToggle}
         onExport={handleExport}
         onSoftWrapToggle={toggleSoftWrap}
         onSettings={() => setSettingsOpen(true)}
@@ -146,6 +159,9 @@ function App() {
         findQuery={find.isOpen ? find.query : ""}
         findMatches={find.isOpen ? find.matches : []}
         currentMatchIndex={find.currentIndex}
+        autoScrollToEnd={autoScrollToEnd}
+        onAutoScrollToEndChange={setAutoScrollToEnd}
+        onScrollToEndRef={setScrollToEnd}
       />
 
       <StatusBar

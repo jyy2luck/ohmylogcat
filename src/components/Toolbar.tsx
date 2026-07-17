@@ -5,10 +5,11 @@ interface ToolbarProps {
   selectedDevice: string;
   isPaused: boolean;
   softWrap: boolean;
+  autoScrollToEnd: boolean;
   onDeviceChange: (serial: string) => void;
   onPauseToggle: () => void;
   onClear: () => void;
-  onScrollToEnd: () => void;
+  onScrollToEndToggle: () => void;
   onExport: () => void;
   onSoftWrapToggle: () => void;
   onSettings: () => void;
@@ -19,10 +20,11 @@ export default function Toolbar({
   selectedDevice,
   isPaused,
   softWrap,
+  autoScrollToEnd,
   onDeviceChange,
   onPauseToggle,
   onClear,
-  onScrollToEnd,
+  onScrollToEndToggle,
   onExport,
   onSoftWrapToggle,
   onSettings,
@@ -59,8 +61,17 @@ export default function Toolbar({
       </button>
 
       <button
-        className="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-100 cursor-pointer"
-        onClick={onScrollToEnd}
+        className={`px-3 py-1 text-sm border rounded cursor-pointer ${
+          autoScrollToEnd
+            ? "border-blue-400 bg-blue-50 hover:bg-blue-100"
+            : "border-gray-300 hover:bg-gray-100"
+        }`}
+        onClick={onScrollToEndToggle}
+        title={
+          autoScrollToEnd
+            ? "Auto-scroll to newest logs (on)"
+            : "Auto-scroll to newest logs (off)"
+        }
       >
         Scroll to End
       </button>
