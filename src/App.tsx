@@ -1,11 +1,15 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import Toolbar from "./components/Toolbar";
 import FilterBar from "./components/FilterBar";
+import FindBar from "./components/FindBar";
 import LogList from "./components/LogList";
 import StatusBar from "./components/StatusBar";
 import SettingsDialog from "./components/SettingsDialog";
 import { useLogcat } from "./hooks/useLogcat";
+import { useSoftWrap } from "./hooks/useSoftWrap";
+import { useFindInLog } from "./hooks/useFindInLog";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 
 function App() {
   const {
@@ -23,10 +27,33 @@ function App() {
     updateFilter,
   } = useLogcat();
 
+  const { softWrap, toggleSoftWrap } = useSoftWrap();
+  const find = useFindInLog(entries);
+  const findInputRef = useRef<HTMLInputElement>(null);
+
   const [tagFilter, setTagFilter] = useState("");
   const [messageFilter, setMessageFilter] = useState("");
   const [levelFilter, setLevelFilter] = useState("All");
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const openFind = useCallback(() => {
+    find.open();
+  }, [find]);
+
+  useEffect(() => {
+    if (find.isOpen) {
+      findInputRef.current?.focus();
+      findInputRef.current?.select();
+    }
+  }, [find.isOpen]);
+
+  useKeyboardShortcuts({
+    isFindOpen: find.isOpen,
+    onOpenFind: openFind,
+    onNextMatch: find.nextMatch,
+    onPrevMatch: find.prevMatch,
+    onCloseFind: find.close,
+  });
 
   const handleTagChange = useCallback(
     (val: string) => {
@@ -74,11 +101,13 @@ function App() {
         devices={devices}
         selectedDevice={selectedDevice}
         isPaused={isPaused}
+        softWrap={softWrap}
         onDeviceChange={handleDeviceChange}
         onPauseToggle={togglePause}
         onClear={clearLogs}
         onScrollToEnd={scrollToEnd}
         onExport={handleExport}
+        onSoftWrapToggle={toggleSoftWrap}
         onSettings={() => setSettingsOpen(true)}
       />
 
@@ -91,7 +120,26 @@ function App() {
         onLevelChange={handleLevelChange}
       />
 
-      <LogList entries={entries} />
+      {find.isOpen && (
+        <FindBar
+          ref={findInputRef}
+          query={find.query}
+          matchCount={find.matches.length}
+          currentIndex={find.currentIndex}
+          onQueryChange={find.setQuery}
+          onNext={find.nextMatch}
+          onPrev={find.prevMatch}
+          onClose={find.close}
+        />
+      )}
+
+      <LogList
+        entries={entries}
+        softWrap={softWrap}
+        findQuery={find.isOpen ? find.query : ""}
+        findMatches={find.isOpen ? find.matches : []}
+        currentMatchIndex={find.currentIndex}
+      />
 
       <StatusBar
         connected={isConnected}

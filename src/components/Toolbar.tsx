@@ -4,11 +4,13 @@ interface ToolbarProps {
   devices: Device[];
   selectedDevice: string;
   isPaused: boolean;
+  softWrap: boolean;
   onDeviceChange: (serial: string) => void;
   onPauseToggle: () => void;
   onClear: () => void;
   onScrollToEnd: () => void;
   onExport: () => void;
+  onSoftWrapToggle: () => void;
   onSettings: () => void;
 }
 
@@ -16,11 +18,13 @@ export default function Toolbar({
   devices,
   selectedDevice,
   isPaused,
+  softWrap,
   onDeviceChange,
   onPauseToggle,
   onClear,
   onScrollToEnd,
   onExport,
+  onSoftWrapToggle,
   onSettings,
 }: ToolbarProps) {
   return (
@@ -66,6 +70,20 @@ export default function Toolbar({
         onClick={onExport}
       >
         Export
+      </button>
+
+      <span className="text-gray-300 select-none">|</span>
+
+      <button
+        className={`px-3 py-1 text-sm border rounded cursor-pointer ${
+          softWrap
+            ? "border-blue-400 bg-blue-50 hover:bg-blue-100"
+            : "border-gray-300 hover:bg-gray-100"
+        }`}
+        onClick={onSoftWrapToggle}
+        title="Use Soft Wraps"
+      >
+        Soft-Wrap
       </button>
 
       <div className="flex-1" />
