@@ -47,8 +47,8 @@ npm run tauri dev
 npm run tauri build
 ```
 
-The macOS build produces a `.dmg` file in `src-tauri/target/release/bundle/dmg/`.
-Windows builds (cross-compiled via GitHub Actions) produce `.msi`/`.exe` in CI artifacts.
+The macOS build produces a standalone `.app` in `src-tauri/target/release/bundle/macos/`.
+Windows builds produce a standalone `ohmylogcat.exe` in `src-tauri/target/release/`.
 
 ## Architecture
 
