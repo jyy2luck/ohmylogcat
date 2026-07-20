@@ -1,85 +1,87 @@
 # Oh My Logcat
 
-A lightweight, standalone Android Logcat viewer built with Tauri v2.
+A lightweight, standalone Android Logcat viewer built with **egui / eframe** (pure Rust, no WebView).
 
-**Why?** Android Studio's built-in Logcat consumes significant JVM memory during long debug sessions. Oh My Logcat is an independent process with a ring buffer (default 200k lines) that can handle hours of debugging without memory bloat.
+**Why?** Android Studio's built-in Logcat consumes significant JVM memory during long debug sessions. Oh My Logcat is a single-process desktop app with a ring buffer (default 200k lines) that can handle hours of debugging without WebView platform tax.
 
 ## Features
 
 - Real-time `adb logcat -v threadtime` streaming
-- Virtual-scrolled log list (react-virtuoso) — smooth even with 200k+ lines
+- Virtualized log list (fixed row height when Soft-Wrap is off)
 - Level-based row coloring (Error/Warn/Info/Debug/Verbose)
 - Filter by Tag (case-sensitive), Message (case-insensitive), and Level (minimum)
-- Pause/Resume, Clear, Scroll to End
+- Pause/Resume, Clear, Scroll to End (tail-follow)
+- Soft-Wrap toggle with horizontal scroll when wrap is off
+- Find in logs (Cmd/Ctrl+F) with highlight and next/prev navigation
 - Configurable buffer presets: Light (50k), Normal (200k), Heavy (500k), Marathon (1M)
 - Export filtered or all logs to `.log` file
-- Settings persist between sessions
+- Settings persist under the user config directory
+
+## Memory expectations
+
+- **Idle / empty buffer**: significantly lower than a Tauri + WKWebView shell (no WebContent helper process for the UI)
+- **Under load**: grows with the buffer preset roughly with stored log lines (full capacity still costs memory by design)
 
 ## Prerequisites
 
-- **Android SDK platform-tools** (`adb`) — must be installable via PATH or configured in settings
+- **Rust** (stable toolchain) — [rustup](https://rustup.rs/)
+- **Android SDK platform-tools** (`adb`) — on PATH or configured in Settings
 - macOS or Windows (Linux not officially tested)
 
 ### ADB Setup
 
 **macOS:**
 ```bash
-# Homebrew
 brew install android-platform-tools
-
-# Or manual SDK install sets up PATH
 ```
 
 **Windows:**
-The default SDK path is `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`.
+Default SDK path is `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`.
 Set a custom path in Settings if adb is elsewhere.
 
 ## Build & Run
 
 ```bash
-# Install dependencies
-npm install
+# Development
+cargo run
 
-# Run in development mode
-npm run tauri dev
-
-# Build production binaries
-npm run tauri build
+# Release binary
+cargo build --release
 ```
 
-The macOS build produces a standalone `.app` in `src-tauri/target/release/bundle/macos/`.
-Windows builds produce a standalone `ohmylogcat.exe` in `src-tauri/target/release/`.
+- macOS / Linux: `target/release/ohmylogcat`
+- Windows: `target/release/ohmylogcat.exe`
+
+```bash
+# Tests
+cargo test
+```
 
 ## Architecture
 
 ```
 ┌──────────────────────────────────────────────────┐
-│  Frontend (React + TypeScript + Tailwind)        │
-│  ┌──────────┬─────────────┬───────────────────┐  │
-│  │ Toolbar  │ Filter Bar  │ Virtual Log List  │  │
-│  │ Device │ │ Tag/Msg/Lvl │ (react-virtuoso)  │  │
-│  │ Pause   │ │             │                   │  │
-│  │ Clear   │ │             │                   │  │
-│  │ Export  │ │             │                   │  │
-│  └──────────┴─────────────┴───────────────────┘  │
-│  Status Bar: [●] Count/Capacity  lines/s  ~MB    │
+│  UI (egui + eframe)                              │
+│  Toolbar · Filter · Virtual Log List · Status    │
 └──────────────────────┬───────────────────────────┘
-                       │ Tauri IPC (events + commands)
+                       │ in-process calls + channel
 ┌──────────────────────▼───────────────────────────┐
-│  Backend (Rust)                                   │
-│  ┌──────────┬──────────┬──────────┬────────────┐  │
-│  │ ADB      │ Parser   │ Ring     │ Filter     │  │
-│  │ Module   │ (thread  │ Buffer   │ (Tag/Msg/  │  │
-│  │          │  time)   │ (config  │  Level)    │  │
-│  │          │          │  cap)    │            │  │
-│  └──────────┴──────────┴──────────┴────────────┘  │
+│  Engine (Rust)                                   │
+│  ADB stream · Parser · Ring buffer · Filter      │
 └──────────────────────────────────────────────────┘
 ```
 
 ## Keyboard Shortcuts
 
-TBD — v1.1 feature.
+| Shortcut | Action |
+|----------|--------|
+| Cmd/Ctrl+F | Open Find bar |
+| Enter / Shift+Enter | Next / previous find match |
+| Esc | Close Find bar |
 
-## License
+## Configuration
 
-MIT
+Settings are stored as JSON under the platform config directory, e.g.:
+
+- macOS: `~/Library/Application Support/ohmylogcat/settings.json`
+- Windows: `%APPDATA%\ohmylogcat\settings.json`

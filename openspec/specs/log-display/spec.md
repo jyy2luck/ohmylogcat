@@ -115,7 +115,7 @@ The system SHALL provide an in-view find bar opened by Cmd+F on macOS or Ctrl+F 
 #### Scenario: Open find bar
 
 - **WHEN** the user presses Cmd+F (macOS) or Ctrl+F (Windows)
-- **THEN** a find bar appears, receives keyboard focus, and the default browser find behavior is suppressed
+- **THEN** a find bar appears and receives keyboard focus
 
 #### Scenario: Case insensitive search
 

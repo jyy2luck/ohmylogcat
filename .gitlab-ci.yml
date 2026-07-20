@@ -1,4 +1,4 @@
-image: node:20
+image: rust:1.85
 
 stages:
   - build
@@ -9,26 +9,20 @@ variables:
 cache:
   paths:
     - .cargo/
-    - node_modules/
-    - src-tauri/target/
+    - target/
 
 windows-build:
   stage: build
   tags:
     - windows
   script:
-    # Install Rust
     - curl -sSf https://sh.rustup.rs | sh -s -- -y
     - set PATH=%PATH%;%USERPROFILE%\.cargo\bin
-    # Install npm deps
-    - npm install
-    # Build frontend
-    - npm run build
-    # Build Tauri app
-    - npm run tauri build
+    - cargo test
+    - cargo build --release
   artifacts:
     paths:
-      - src-tauri/target/release/ohmylogcat.exe
+      - target/release/ohmylogcat.exe
     expire_in: 30 days
   only:
     - main
