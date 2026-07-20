@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useCallback, useRef, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import Toolbar from "./components/Toolbar";
@@ -9,6 +9,7 @@ import StatusBar from "./components/StatusBar";
 import SettingsDialog from "./components/SettingsDialog";
 import { useLogcat } from "./hooks/useLogcat";
 import { useSoftWrap } from "./hooks/useSoftWrap";
+import { useScrollToEnd } from "./hooks/useScrollToEnd";
 import { useFindInLog } from "./hooks/useFindInLog";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 
@@ -17,6 +18,7 @@ function App() {
     devices,
     selectedDevice,
     entries,
+    scrollGeneration,
     isPaused,
     isConnected,
     stats,
@@ -29,7 +31,7 @@ function App() {
     updateFilter,
   } = useLogcat();
 
-  const [autoScrollToEnd, setAutoScrollToEnd] = useState(true);
+  const { scrollToEndEnabled, setScrollToEndEnabled } = useScrollToEnd();
 
   const { softWrap, toggleSoftWrap } = useSoftWrap();
   const find = useFindInLog(entries);
@@ -86,13 +88,13 @@ function App() {
   );
 
   const handleScrollToEndToggle = useCallback(() => {
-    if (autoScrollToEnd) {
-      setAutoScrollToEnd(false);
+    if (scrollToEndEnabled) {
+      setScrollToEndEnabled(false);
     } else {
-      setAutoScrollToEnd(true);
+      setScrollToEndEnabled(true);
       scrollToEnd();
     }
-  }, [autoScrollToEnd, scrollToEnd]);
+  }, [scrollToEndEnabled, scrollToEnd, setScrollToEndEnabled]);
 
   const handleExport = useCallback(async () => {
     try {
@@ -124,7 +126,7 @@ function App() {
         onDeviceChange={handleDeviceChange}
         onPauseToggle={togglePause}
         onClear={clearLogs}
-        autoScrollToEnd={autoScrollToEnd}
+        autoScrollToEnd={scrollToEndEnabled}
         onScrollToEndToggle={handleScrollToEndToggle}
         onExport={handleExport}
         onSoftWrapToggle={toggleSoftWrap}
@@ -155,12 +157,13 @@ function App() {
 
       <LogList
         entries={entries}
+        scrollGeneration={scrollGeneration}
         softWrap={softWrap}
         findQuery={find.isOpen ? find.query : ""}
         findMatches={find.isOpen ? find.matches : []}
         currentMatchIndex={find.currentIndex}
-        autoScrollToEnd={autoScrollToEnd}
-        onAutoScrollToEndChange={setAutoScrollToEnd}
+        autoScrollToEnd={scrollToEndEnabled}
+        onAutoScrollToEndChange={setScrollToEndEnabled}
         onScrollToEndRef={setScrollToEnd}
       />
 

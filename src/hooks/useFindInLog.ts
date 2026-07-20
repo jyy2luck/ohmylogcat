@@ -37,8 +37,8 @@ export function useFindInLog(entries: LogEntry[]) {
   const [currentIndex, setCurrentIndex] = useState(0);
 
   const matches = useMemo(
-    () => scanMatches(entries, query),
-    [entries, query]
+    () => (isOpen ? scanMatches(entries, query) : []),
+    [entries, query, isOpen]
   );
 
   useEffect(() => {

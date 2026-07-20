@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  type ReactNode,
+} from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { LogEntry, LogLevel } from "../types";
 import type { FindMatch } from "../hooks/useFindInLog";
@@ -6,6 +11,7 @@ import { formatLogLine } from "../utils/logFormat";
 
 interface LogListProps {
   entries: LogEntry[];
+  scrollGeneration?: number;
   softWrap?: boolean;
   findQuery?: string;
   findMatches?: FindMatch[];
@@ -64,6 +70,7 @@ function renderHighlightedText(
 
 export default function LogList({
   entries,
+  scrollGeneration = 0,
   softWrap = false,
   findQuery = "",
   findMatches = [],
@@ -73,8 +80,109 @@ export default function LogList({
   onScrollToEndRef,
 }: LogListProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const entriesRef = useRef(entries);
+  const autoScrollToEndRef = useRef(autoScrollToEnd);
+  const findMatchesRef = useRef(findMatches);
+  const suppressAutoDisableRef = useRef(false);
+  const suppressAutoDisableTimerRef = useRef<number | null>(null);
+  const scrollerCleanupRef = useRef<(() => void) | null>(null);
+  const lastScrollTopRef = useRef(0);
+
+  entriesRef.current = entries;
+  autoScrollToEndRef.current = autoScrollToEnd;
+  findMatchesRef.current = findMatches;
 
   const findActive = findQuery.trim().length > 0 && findMatches.length > 0;
+
+  const beginProgrammaticScroll = useCallback(() => {
+    suppressAutoDisableRef.current = true;
+    if (suppressAutoDisableTimerRef.current !== null) {
+      window.clearTimeout(suppressAutoDisableTimerRef.current);
+    }
+    suppressAutoDisableTimerRef.current = window.setTimeout(() => {
+      suppressAutoDisableRef.current = false;
+      suppressAutoDisableTimerRef.current = null;
+    }, 300);
+  }, []);
+
+  const disableTailFollowing = useCallback(() => {
+    onAutoScrollToEndChange?.(false);
+  }, [onAutoScrollToEndChange]);
+
+  const handleScrollerRef = useCallback(
+    (ref: HTMLElement | null | Window) => {
+      scrollerCleanupRef.current?.();
+      scrollerCleanupRef.current = null;
+
+      if (!ref || !(ref instanceof HTMLElement)) return;
+
+      lastScrollTopRef.current = ref.scrollTop;
+
+      const onWheel = (event: WheelEvent) => {
+        if (suppressAutoDisableRef.current || !autoScrollToEndRef.current) return;
+        if (event.deltaY < 0) {
+          disableTailFollowing();
+        }
+      };
+
+      const onScroll = () => {
+        const scrollTop = ref.scrollTop;
+        if (suppressAutoDisableRef.current) {
+          lastScrollTopRef.current = scrollTop;
+          return;
+        }
+        if (
+          autoScrollToEndRef.current &&
+          scrollTop < lastScrollTopRef.current - 1
+        ) {
+          disableTailFollowing();
+        }
+        lastScrollTopRef.current = scrollTop;
+      };
+
+      const onKeyDown = (event: KeyboardEvent) => {
+        if (suppressAutoDisableRef.current || !autoScrollToEndRef.current) {
+          return;
+        }
+        if (
+          event.key === "ArrowUp" ||
+          event.key === "PageUp" ||
+          event.key === "Home"
+        ) {
+          disableTailFollowing();
+        }
+      };
+
+      ref.addEventListener("wheel", onWheel, { passive: true });
+      ref.addEventListener("scroll", onScroll, { passive: true });
+      ref.addEventListener("keydown", onKeyDown);
+
+      scrollerCleanupRef.current = () => {
+        ref.removeEventListener("wheel", onWheel);
+        ref.removeEventListener("scroll", onScroll);
+        ref.removeEventListener("keydown", onKeyDown);
+      };
+    },
+    [disableTailFollowing]
+  );
+
+  const scrollToBottom = useCallback(() => {
+    if (entriesRef.current.length === 0) return;
+    beginProgrammaticScroll();
+    virtuosoRef.current?.scrollToIndex({
+      index: "LAST",
+      align: "end",
+    });
+  }, [beginProgrammaticScroll]);
+
+  useEffect(() => {
+    return () => {
+      scrollerCleanupRef.current?.();
+      if (suppressAutoDisableTimerRef.current !== null) {
+        window.clearTimeout(suppressAutoDisableTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (findActive) {
@@ -85,44 +193,68 @@ export default function LogList({
           align: "center",
         });
       }
-      return;
     }
-
   }, [entries.length, findActive, findMatches, currentMatchIndex, findQuery]);
 
-  const scrollToEnd = useCallback(() => {
-    if (entries.length === 0) return;
-    virtuosoRef.current?.scrollToIndex({
-      index: entries.length - 1,
-      align: "end",
-    });
-  }, [entries.length]);
+  useEffect(() => {
+    if (!autoScrollToEnd || findActive || entries.length === 0) return;
+    scrollToBottom();
+  }, [
+    scrollGeneration,
+    autoScrollToEnd,
+    findActive,
+    entries.length,
+    scrollToBottom,
+  ]);
 
   useEffect(() => {
-    onScrollToEndRef?.(scrollToEnd);
-  }, [scrollToEnd, onScrollToEndRef]);
+    onScrollToEndRef?.(scrollToBottom);
+  }, [scrollToBottom, onScrollToEndRef]);
 
-  const handleScroll = useCallback(
-    (atBottom: boolean) => {
-      if (!atBottom && autoScrollToEnd) {
-        onAutoScrollToEndChange?.(false);
+  const followOutput = useCallback(() => {
+    const findActiveNow =
+      findQuery.trim().length > 0 && findMatchesRef.current.length > 0;
+    return autoScrollToEndRef.current && !findActiveNow ? "auto" : false;
+  }, [findQuery]);
+
+  const itemContent = useCallback(
+    (index: number) => {
+      const entry = entriesRef.current[index];
+      if (!entry) return null;
+
+      const color = LEVEL_COLORS[entry.level] ?? "text-gray-400";
+      const text = formatLogLine(entry);
+      const query = findQuery.trim();
+      const content =
+        query.length > 0
+          ? renderHighlightedText(
+              text,
+              index,
+              findMatches,
+              currentMatchIndex
+            )
+          : text;
+
+      if (softWrap) {
+        return (
+          <div
+            className={`px-3 py-0.5 text-xs font-mono whitespace-pre-wrap break-all hover:bg-gray-50 ${color}`}
+          >
+            {content}
+          </div>
+        );
       }
+
+      return (
+        <div className="px-3 py-0.5 text-xs font-mono hover:bg-gray-50">
+          <span className={`whitespace-nowrap inline-block ${color}`}>
+            {content}
+          </span>
+        </div>
+      );
     },
-    [autoScrollToEnd, onAutoScrollToEndChange]
+    [softWrap, findQuery, findMatches, currentMatchIndex]
   );
-
-  const nowrapMinWidth = useMemo(() => {
-    if (softWrap || entries.length === 0) return undefined;
-    let maxChars = 0;
-    for (const entry of entries) {
-      maxChars = Math.max(maxChars, formatLogLine(entry).length);
-    }
-    return maxChars > 0 ? `calc(${maxChars}ch + 1.5rem)` : undefined;
-  }, [entries, softWrap]);
-
-  const lineClassName = softWrap
-    ? "whitespace-pre-wrap break-all"
-    : "whitespace-nowrap";
 
   if (entries.length === 0) {
     return (
@@ -133,50 +265,20 @@ export default function LogList({
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-hidden">
-      <div
-        className={
-          softWrap
-            ? "h-full"
-            : "h-full overflow-x-auto overflow-y-hidden"
-        }
-      >
-        <div
-          className="h-full"
-          style={nowrapMinWidth ? { minWidth: nowrapMinWidth } : undefined}
-        >
-          <Virtuoso
-            ref={virtuosoRef}
-            className="h-full"
-            totalCount={entries.length}
-            atBottomStateChange={handleScroll}
-            followOutput={autoScrollToEnd && !findActive ? "auto" : false}
-            increaseViewportBy={softWrap ? 400 : 200}
-            itemContent={(index) => {
-              const entry = entries[index];
-              const color = LEVEL_COLORS[entry.level] ?? "text-gray-400";
-              const text = formatLogLine(entry);
-              const content =
-                findQuery.trim().length > 0
-                  ? renderHighlightedText(
-                      text,
-                      index,
-                      findMatches,
-                      currentMatchIndex
-                    )
-                  : text;
-
-              return (
-                <div
-                  className={`px-3 py-0.5 text-xs font-mono hover:bg-gray-50 ${lineClassName} ${color}`}
-                >
-                  {content}
-                </div>
-              );
-            }}
-          />
-        </div>
-      </div>
+    <div
+      className={`flex-1 min-h-0 ${
+        softWrap ? "overflow-hidden" : "overflow-x-auto overflow-y-hidden"
+      }`}
+    >
+      <Virtuoso
+        ref={virtuosoRef}
+        className="h-full"
+        totalCount={entries.length}
+        scrollerRef={handleScrollerRef}
+        followOutput={followOutput}
+        increaseViewportBy={softWrap ? 400 : 200}
+        itemContent={itemContent}
+      />
     </div>
   );
 }

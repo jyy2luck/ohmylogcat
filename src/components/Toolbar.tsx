@@ -67,10 +67,11 @@ export default function Toolbar({
             : "border-gray-300 hover:bg-gray-100"
         }`}
         onClick={onScrollToEndToggle}
+        aria-pressed={autoScrollToEnd}
         title={
           autoScrollToEnd
-            ? "Auto-scroll to newest logs (on)"
-            : "Auto-scroll to newest logs (off)"
+            ? "Tail-following on — automatically scroll to newest logs"
+            : "Tail-following off — click to enable and jump to newest logs"
         }
       >
         Scroll to End
