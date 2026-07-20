@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "A lightweight Android Logcat viewer"
 authors = ["you"]
 edition = "2021"
+repository = "https://github.com/jyy2luck/ohmylogcat"
+homepage = "https://github.com/jyy2luck/ohmylogcat"
 
 [dependencies]
 ratatui = "0.29"

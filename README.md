@@ -21,12 +21,40 @@ A lightweight Android Logcat viewer as a **terminal UI (TUI)** — ratatui + cro
 - **Idle / empty buffer**: near-zero UI overhead beyond the Rust process itself (no wgpu/egui atlas)
 - **Under load**: grows with the buffer preset and stored log lines (full capacity still costs memory by design)
 
+## Install
+
+Prebuilt binaries are published on [GitHub Releases](https://github.com/jyy2luck/ohmylogcat/releases). You still need **adb** (see below).
+
+### macOS
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jyy2luck/ohmylogcat/main/install.sh | sh
+```
+
+Installs to `~/.local/bin` (override with `INSTALL_DIR=...`).
+
+Or download the matching `.tar.gz` from the latest release and place `ohmylogcat` on your `PATH`.
+
+### Windows
+
+1. Open the [latest release](https://github.com/jyy2luck/ohmylogcat/releases/latest)
+2. Download `ohmylogcat-x86_64-pc-windows-msvc.zip`
+3. Extract `ohmylogcat.exe` somewhere on your `PATH` (or run it from that folder)
+4. Prefer **Windows Terminal**
+
+### From source
+
+```bash
+cargo install --git https://github.com/jyy2luck/ohmylogcat
+# or: clone, then cargo build --release
+```
+
 ## Prerequisites
 
-- **Rust** (stable toolchain) — [rustup](https://rustup.rs/)
 - **Android SDK platform-tools** (`adb`) — on PATH or configured in Settings
 - A capable terminal: macOS Terminal / iTerm2, **Windows Terminal** (ConPTY)
 - macOS or Windows (Linux not officially tested)
+- **Rust** — only if building from source ([rustup](https://rustup.rs/))
 
 ### ADB Setup
 
@@ -55,6 +83,15 @@ cargo build --release
 ```bash
 # Tests
 cargo test
+```
+
+### Publishing a release
+
+Maintainers: push a version tag to trigger [.github/workflows/release.yml](.github/workflows/release.yml):
+
+```bash
+git tag v0.1.0
+git push github v0.1.0
 ```
 
 ### Smoke checklist
