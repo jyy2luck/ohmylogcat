@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change mvp-logcat-viewer. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Display logs in a virtualized scrollable list
 
 The system SHALL render log entries in a virtualized list that remains responsive with buffers up to 200,000 lines.
@@ -57,7 +59,7 @@ The system SHALL automatically scroll to the newest log entry when tail-followin
 
 ### Requirement: Scroll to end control
 
-The system SHALL provide a Scroll to End toolbar control that acts as a persistent tail-following toggle aligned with Android Studio Logcat, with visual on/off state and preference persistence across application restarts.
+The system SHALL provide a Scroll to End / Follow toolbar control that acts as a persistent tail-following toggle aligned with Android Studio Logcat, with visual on/off state and preference persistence across application restarts. Activation SHALL work via keyboard shortcut and via the toolbar control (including mouse when available).
 
 #### Scenario: Default tail-following on first launch
 
@@ -66,95 +68,90 @@ The system SHALL provide a Scroll to End toolbar control that acts as a persiste
 
 #### Scenario: Persist tail-following preference
 
-- **WHEN** the user toggles Scroll to End
+- **WHEN** the user toggles Scroll to End / Follow
 - **THEN** the tail-following preference is persisted and restored on the next application launch
 
 #### Scenario: Enable tail-following from toolbar
 
-- **WHEN** tail-following is off and the user clicks Scroll to End
+- **WHEN** tail-following is off and the user activates Scroll to End / Follow
 - **THEN** tail-following turns on and the view jumps to the newest entry
 
 #### Scenario: Disable tail-following from toolbar
 
-- **WHEN** tail-following is on and the user clicks Scroll to End
+- **WHEN** tail-following is on and the user activates Scroll to End / Follow
 - **THEN** tail-following turns off
 
 #### Scenario: Tail-following survives list reset events
 
 - **WHEN** tail-following is on and the user clears logs or switches devices
-- **THEN** tail-following remains enabled without requiring the user to click Scroll to End again
+- **THEN** tail-following remains enabled without requiring the user to activate Follow again
 
 ### Requirement: Soft-Wrap toggle for log lines
 
-The system SHALL provide a Soft-Wrap toolbar control that toggles between single-line (no wrap) and automatic line wrapping for log entries, aligned with Android Studio Logcat Soft-Wrap behavior.
+The system SHALL support a Soft-Wrap preference. When Soft-Wrap is off, each log entry SHALL render on a single terminal row with horizontal panning or truncation such that the full line remains reachable. When Soft-Wrap is on, long lines MAY wrap within the viewport width; exact variable-height virtualization quality is best-effort in the TUI shell.
 
 #### Scenario: Default is no wrap
 
 - **WHEN** the user opens the application for the first time or has no saved preference
-- **THEN** Soft-Wrap is off and each log entry renders on a single line without ellipsis truncation
+- **THEN** Soft-Wrap is off and each log entry occupies a single row in the viewport
 
-#### Scenario: No wrap with horizontal scroll
+#### Scenario: No wrap with horizontal access
 
 - **WHEN** Soft-Wrap is off and a log line exceeds the viewport width
-- **THEN** the user can scroll horizontally to view the full line content
-
-#### Scenario: Enable soft wrap
-
-- **WHEN** the user enables Soft-Wrap from the toolbar
-- **THEN** long log lines wrap within the viewport using automatic line breaking
+- **THEN** the user can pan horizontally or otherwise reveal the clipped portion of the line
 
 #### Scenario: Persist soft wrap preference
 
-- **WHEN** the user toggles Soft-Wrap
+- **WHEN** the user toggles Soft-Wrap (when the control is available)
 - **THEN** the preference is persisted across application restarts
 
 ### Requirement: Find in log with keyboard shortcut
 
-The system SHALL provide an in-view find bar opened by Cmd+F on macOS or Ctrl+F on Windows that searches within currently visible (filter-applied) log entries without hiding non-matching lines.
+The system SHALL provide an in-view find UI opened by `/` and, when the terminal delivers them, Cmd+F on macOS or Ctrl+F on Windows, that searches within currently visible (filter-applied) log entries without hiding non-matching lines.
 
 #### Scenario: Open find bar
 
-- **WHEN** the user presses Cmd+F (macOS) or Ctrl+F (Windows)
-- **THEN** a find bar appears and receives keyboard focus
+- **WHEN** the user presses `/` (or Cmd+F / Ctrl+F when delivered by the terminal)
+- **THEN** a find input appears and receives keyboard focus
 
 #### Scenario: Case insensitive search
 
-- **WHEN** the user enters a search query in the find bar
+- **WHEN** the user enters a search query in the find input
 - **THEN** the system matches substrings case-insensitively within the formatted text of each visible log entry
 
 #### Scenario: Highlight all matches
 
 - **WHEN** one or more matches exist for the current query
-- **THEN** all matching substrings are visually highlighted in the log list
+- **THEN** matching substrings are visually highlighted in the log viewport (e.g. ANSI emphasis)
 
 #### Scenario: No matches
 
 - **WHEN** the query matches no visible log entries
-- **THEN** the find bar shows zero matches and no highlights are displayed
+- **THEN** the find UI shows zero matches and no highlights are displayed
 
 #### Scenario: Find does not filter logs
 
-- **WHEN** the user searches with the find bar
+- **WHEN** the user searches with the find UI
 - **THEN** all log entries remain visible and only matching substrings are highlighted
 
 ### Requirement: Find match navigation
 
-The system SHALL allow the user to navigate between find matches with next/previous controls and display the current match index and total match count.
+The system SHALL allow the user to navigate between find matches with next/previous controls or shortcuts and display the current match index and total match count.
 
 #### Scenario: Next match
 
-- **WHEN** the user presses Enter or clicks the next control in the find bar
+- **WHEN** the user presses Enter or the next-match shortcut while find is active with matches
 - **THEN** the view scrolls to the next match and that match receives stronger highlight emphasis
 
 #### Scenario: Previous match
 
-- **WHEN** the user presses Shift+Enter or clicks the previous control in the find bar
+- **WHEN** the user presses the previous-match shortcut while find is active with matches
 - **THEN** the view scrolls to the previous match and that match receives stronger highlight emphasis
 
 #### Scenario: Match counter
 
 - **WHEN** matches exist for the current query
-- **THEN** the find bar displays the current match position and total count (e.g. 2/15)
+- **THEN** the find UI displays the current match position and total count (e.g. 2/15)
 
 #### Scenario: Wrap navigation at boundaries
 
@@ -163,15 +160,9 @@ The system SHALL allow the user to navigate between find matches with next/previ
 
 ### Requirement: Close find bar
 
-The system SHALL allow the user to close the find bar and clear all find highlights.
+The system SHALL allow the user to close the find UI and clear all find highlights.
 
 #### Scenario: Close with Escape
 
-- **WHEN** the find bar is open and the user presses Esc
-- **THEN** the find bar closes and all find highlights are removed
-
-#### Scenario: Close with dismiss control
-
-- **WHEN** the user clicks the close control on the find bar
-- **THEN** the find bar closes and all find highlights are removed
-
+- **WHEN** the find UI is open and the user presses Esc
+- **THEN** the find UI closes and all find highlights are removed

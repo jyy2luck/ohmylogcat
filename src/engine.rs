@@ -10,7 +10,7 @@ use std::time::Instant;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc as tokio_mpsc;
 
-/// Events delivered to the egui UI thread.
+/// Events delivered to the TUI main loop.
 #[derive(Debug)]
 pub enum EngineEvent {
     /// `n` new filtered rows were appended (no entry payloads — UI reads from Engine).

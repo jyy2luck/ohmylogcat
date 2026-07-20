@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change mvp-logcat-viewer. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Configure adb executable path
 
 The system SHALL allow the user to set the absolute path to the adb executable and persist it across sessions.
@@ -28,10 +30,9 @@ The system SHALL persist the selected buffer preset or custom line count and res
 
 ### Requirement: Settings accessible from UI
 
-The system SHALL provide a settings entry point from the main window to edit adb path and buffer configuration.
+The system SHALL provide a settings entry point from the main TUI (toolbar control and/or keyboard shortcut) that opens an in-terminal settings panel to edit adb path and buffer configuration.
 
 #### Scenario: Open settings
 
-- **WHEN** the user opens settings from the main window
-- **THEN** adb path and buffer preset controls are displayed and editable
-
+- **WHEN** the user opens settings from the main TUI
+- **THEN** adb path and buffer preset controls are displayed in a modal panel and are editable
