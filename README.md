@@ -37,10 +37,15 @@ Or download the matching `.tar.gz` from the latest release and place `ohmylogcat
 
 ### Windows
 
-1. Open the [latest release](https://github.com/jyy2luck/ohmylogcat/releases/latest)
-2. Download `ohmylogcat-x86_64-pc-windows-msvc.zip`
-3. Extract `ohmylogcat.exe` somewhere on your `PATH` (or run it from that folder)
-4. Prefer **Windows Terminal**
+在 **PowerShell** 中（推荐 Windows Terminal）：
+
+```powershell
+irm https://raw.githubusercontent.com/jyy2luck/ohmylogcat/main/install.ps1 | iex
+```
+
+默认安装到 `%LOCALAPPDATA%\ohmylogcat` 并写入用户 PATH（新开终端后生效）。可用 `$env:INSTALL_DIR=...` 覆盖安装目录。
+
+若浏览器下载被拦截，也可用同一脚本绕过；手动方式见 [Releases](https://github.com/jyy2luck/ohmylogcat/releases/latest) 中的 `ohmylogcat-x86_64-pc-windows-msvc.zip`。
 
 ### From source
 
