@@ -27,11 +27,15 @@ const DEFAULT_EXPORT_NAME: &str = "ohmylogcat.log";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Logs,
-    Tag,
-    Message,
     Level,
     Find,
     Modal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterField {
+    Tag,
+    Message,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +47,7 @@ pub enum ModalKind {
     },
     Settings,
     ExportMenu,
+    FilterEdit { field: FilterField },
 }
 
 #[derive(Debug)]
@@ -228,9 +233,15 @@ impl OhmylogcatApp {
         Ok(())
     }
 
+    fn is_top_layer(&self) -> bool {
+        self.modal.is_none() && !self.find.open
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
-        // Global quit: Ctrl+C (raw mode swallows the default SIGINT path).
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if self.is_top_layer()
+            && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q'))
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+        {
             self.should_quit = true;
             return;
         }
@@ -242,8 +253,6 @@ impl OhmylogcatApp {
 
         match self.focus {
             Focus::Logs => self.handle_logs_key(key),
-            Focus::Tag => self.handle_text_field_key(key, true),
-            Focus::Message => self.handle_text_field_key(key, false),
             Focus::Level => self.handle_level_key(key),
             Focus::Find => self.handle_find_key(key),
             Focus::Modal => self.handle_modal_key(key),
@@ -261,7 +270,6 @@ impl OhmylogcatApp {
         }
 
         match key.code {
-            KeyCode::Char('q') | KeyCode::Char('Q') => self.should_quit = true,
             KeyCode::Char(' ') => self.toggle_pause(),
             KeyCode::Char('c') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.clear_logs();
@@ -277,16 +285,16 @@ impl OhmylogcatApp {
             KeyCode::Char('/') => self.open_find(),
             KeyCode::Char('n') if self.find.open => self.find.next(),
             KeyCode::Char('N') if self.find.open => self.find.prev(),
-            KeyCode::Char('t') => {
-                self.focus = Focus::Tag;
+            KeyCode::Char('t') if self.is_top_layer() => {
+                self.open_filter_edit(FilterField::Tag);
             }
-            KeyCode::Char('m') => {
-                self.focus = Focus::Message;
+            KeyCode::Char('m') if self.is_top_layer() => {
+                self.open_filter_edit(FilterField::Message);
             }
             KeyCode::Char('l') => {
                 self.focus = Focus::Level;
             }
-            KeyCode::Tab => self.focus = Focus::Tag,
+            KeyCode::Tab => self.focus = Focus::Level,
             KeyCode::Up | KeyCode::Char('k') => self.scroll_by(-1),
             KeyCode::Down | KeyCode::Char('j') => self.scroll_by(1),
             KeyCode::PageUp => self.scroll_by(-(self.viewport_height as isize)),
@@ -316,50 +324,11 @@ impl OhmylogcatApp {
         }
     }
 
-    fn handle_text_field_key(&mut self, key: KeyEvent, is_tag: bool) {
-        match key.code {
-            KeyCode::Esc => self.focus = Focus::Logs,
-            KeyCode::Tab => {
-                self.focus = if is_tag {
-                    Focus::Message
-                } else {
-                    Focus::Level
-                };
-            }
-            KeyCode::BackTab => {
-                self.focus = if is_tag {
-                    Focus::Logs
-                } else {
-                    Focus::Tag
-                };
-            }
-            KeyCode::Backspace => {
-                let field = if is_tag {
-                    &mut self.filter_tag
-                } else {
-                    &mut self.filter_message
-                };
-                field.pop();
-                self.mark_filter_dirty();
-            }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let field = if is_tag {
-                    &mut self.filter_tag
-                } else {
-                    &mut self.filter_message
-                };
-                field.push(c);
-                self.mark_filter_dirty();
-            }
-            _ => {}
-        }
-    }
-
     fn handle_level_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc | KeyCode::Enter => self.focus = Focus::Logs,
             KeyCode::Tab => self.focus = Focus::Logs,
-            KeyCode::BackTab => self.focus = Focus::Message,
+            KeyCode::BackTab => self.focus = Focus::Logs,
             KeyCode::Left | KeyCode::Up | KeyCode::Char('h') | KeyCode::Char('k') => {
                 self.cycle_level(false);
             }
@@ -407,6 +376,35 @@ impl OhmylogcatApp {
             ModalKind::Export { .. } => self.handle_export_modal_key(key),
             ModalKind::Settings => self.handle_settings_modal_key(key),
             ModalKind::ExportMenu => self.handle_export_menu_key(key),
+            ModalKind::FilterEdit { field } => self.handle_filter_edit_modal_key(key, field),
+        }
+    }
+
+    fn handle_filter_edit_modal_key(&mut self, key: KeyEvent, field: FilterField) {
+        match key.code {
+            KeyCode::Esc => self.close_modal(),
+            KeyCode::Backspace => {
+                match field {
+                    FilterField::Tag => {
+                        self.filter_tag.pop();
+                    }
+                    FilterField::Message => {
+                        self.filter_message.pop();
+                    }
+                }
+                self.mark_filter_dirty();
+            }
+            KeyCode::Char(c)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::SUPER) =>
+            {
+                match field {
+                    FilterField::Tag => self.filter_tag.push(c),
+                    FilterField::Message => self.filter_message.push(c),
+                }
+                self.mark_filter_dirty();
+            }
+            _ => {}
         }
     }
 
@@ -572,13 +570,13 @@ impl OhmylogcatApp {
                 }
                 if let Some(r) = self.hit_map.filter_tag {
                     if contains(r, col, row) {
-                        self.focus = Focus::Tag;
+                        self.open_filter_edit(FilterField::Tag);
                         return;
                     }
                 }
                 if let Some(r) = self.hit_map.filter_message {
                     if contains(r, col, row) {
-                        self.focus = Focus::Message;
+                        self.open_filter_edit(FilterField::Message);
                         return;
                     }
                 }
@@ -631,6 +629,11 @@ impl OhmylogcatApp {
             filtered_only,
             path: DEFAULT_EXPORT_NAME.into(),
         });
+        self.focus = Focus::Modal;
+    }
+
+    fn open_filter_edit(&mut self, field: FilterField) {
+        self.modal = Some(ModalKind::FilterEdit { field });
         self.focus = Focus::Modal;
     }
 
@@ -1111,6 +1114,11 @@ impl OhmylogcatApp {
             ));
             x = x.saturating_add(width);
         }
+        spans.push(Span::raw(" │ "));
+        spans.push(Span::styled(
+            "[q]Quit",
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
 
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
     }
@@ -1121,8 +1129,7 @@ impl OhmylogcatApp {
             .map(|l| l.to_display())
             .unwrap_or("Verbose");
 
-        let tag_style = field_style(self.focus == Focus::Tag);
-        let msg_style = field_style(self.focus == Focus::Message);
+        let summary_style = Style::default();
         let level_style = field_style(self.focus == Focus::Level);
 
         let tag_label = format!("Tag:[{}] ", truncate_input(&self.filter_tag, 16));
@@ -1155,12 +1162,12 @@ impl OhmylogcatApp {
         });
 
         let line = Line::from(vec![
-            Span::styled(tag_label, tag_style),
+            Span::styled(tag_label, summary_style),
             Span::raw(" "),
-            Span::styled(msg_label, msg_style),
+            Span::styled(msg_label, summary_style),
             Span::raw(" "),
             Span::styled(level_label, level_style),
-            Span::raw("  (t/m/l focus · Tab cycle · Esc logs)"),
+            Span::raw("  (t/m edit · l level · click Tag/Message)"),
         ]);
         frame.render_widget(Paragraph::new(line), area);
     }
@@ -1285,8 +1292,6 @@ impl OhmylogcatApp {
         let live_txt = if live { "● Live" } else { "○ Idle" };
         let focus_hint = match self.focus {
             Focus::Logs => "focus:logs",
-            Focus::Tag => "focus:tag",
-            Focus::Message => "focus:message",
             Focus::Level => "focus:level",
             Focus::Find => "focus:find",
             Focus::Modal => "focus:modal",
@@ -1419,6 +1424,27 @@ impl OhmylogcatApp {
                 let block = Block::default()
                     .title(" Settings ")
                     .borders(Borders::ALL);
+                frame.render_widget(Paragraph::new(lines).block(block), popup);
+            }
+            ModalKind::FilterEdit { field } => {
+                let (title, label, value) = match field {
+                    FilterField::Tag => (
+                        " Tag filter ",
+                        "Tag contains:",
+                        self.filter_tag.as_str(),
+                    ),
+                    FilterField::Message => (
+                        " Message filter ",
+                        "Message contains:",
+                        self.filter_message.as_str(),
+                    ),
+                };
+                let lines = vec![
+                    Line::from(format!("{label} [{value}]")),
+                    Line::from(""),
+                    Line::from("Live filter · Esc done"),
+                ];
+                let block = Block::default().title(title).borders(Borders::ALL);
                 frame.render_widget(Paragraph::new(lines).block(block), popup);
             }
         }

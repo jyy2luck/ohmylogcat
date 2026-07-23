@@ -109,7 +109,7 @@ git push github v0.1.0
 **Windows Terminal**
 - [ ] Same keyboard flows as macOS
 - [ ] Mouse click on toolbar labels (optional; keyboard must remain complete)
-- [ ] Colors and alternate-screen restore on quit (`q`)
+- [ ] Colors and alternate-screen restore on quit (`q` on top layer)
 
 ## Architecture
 
@@ -129,7 +129,7 @@ git push github v0.1.0
 
 | Shortcut | Context | Action |
 |----------|---------|--------|
-| `q` / Ctrl+C | Anywhere | Quit |
+| `q` | Top layer (no modal, find closed) | Quit |
 | `Space` | Logs | Pause / Resume |
 | `c` | Logs | Clear buffer |
 | `f` | Logs | Toggle Follow (tail) |
@@ -137,9 +137,10 @@ git push github v0.1.0
 | `e` | Logs | Export menu |
 | `s` | Logs | Settings |
 | `w` | Logs | Toggle Soft-Wrap preference |
-| `t` / `m` / `l` | Logs | Focus Tag / Message / Level |
-| `Tab` | Filters | Cycle Tag → Message → Level → Logs |
-| `Esc` | Filters / Find / Modal | Back to log viewport / close |
+| `t` / `m` | Logs (top layer) | Open Tag / Message filter modal |
+| `l` / `Tab` | Logs / Level | Focus Level filter (inline) |
+| Click Tag / Message | Filter row | Open Tag / Message filter modal |
+| `Esc` | Filter modal / Find / Modal | Close overlay · return to log viewport |
 | `/` or Ctrl/Cmd+F | Logs | Open Find |
 | `n` / `N` | Logs (find open) | Next / previous match |
 | Enter / Shift+Enter | Find | Next / previous match |
