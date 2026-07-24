@@ -6,7 +6,7 @@ use crate::parser::LogLevel;
 use crate::settings::{
     load_settings, save_settings, BufferPreset, BufferStats, Settings,
 };
-use crate::ui::{format_log_line, level_color, FindState};
+use crate::ui::{format_log_line, level_color, line_spans, mouse_to_log_pos, reset_pointer_shape, set_pointer_shape, FindState, LogPos, PointerShape, TextSelection, ViewportMap};
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -138,6 +138,9 @@ pub struct OhmylogcatApp {
     last_device_refresh: Instant,
 
     hit_map: HitMap,
+    selection: TextSelection,
+    last_mouse: Option<(u16, u16)>,
+    last_pointer: Option<PointerShape>,
     should_quit: bool,
 }
 
@@ -178,6 +181,9 @@ impl OhmylogcatApp {
             filter_changed_at: None,
             last_device_refresh: Instant::now() - Duration::from_secs(60),
             hit_map: HitMap::default(),
+            selection: TextSelection::default(),
+            last_mouse: None,
+            last_pointer: None,
             should_quit: false,
             settings,
         };
@@ -238,6 +244,10 @@ impl OhmylogcatApp {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        if is_copy_shortcut(&key) && self.copy_selection() {
+            return;
+        }
+
         if self.is_top_layer()
             && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q'))
             && !key.modifiers.contains(KeyModifiers::CONTROL)
@@ -271,7 +281,11 @@ impl OhmylogcatApp {
 
         match key.code {
             KeyCode::Char(' ') => self.toggle_pause(),
-            KeyCode::Char('c') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('c')
+                if !key.modifiers.intersects(
+                    KeyModifiers::CONTROL | KeyModifiers::SUPER | KeyModifiers::META,
+                ) =>
+            {
                 self.clear_logs();
             }
             KeyCode::Char('f') => self.toggle_follow(),
@@ -545,12 +559,19 @@ impl OhmylogcatApp {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) {
+        let col = mouse.column;
+        let row = mouse.row;
+        self.note_mouse(col, row);
+
         match mouse.kind {
+            MouseEventKind::Moved => {}
             MouseEventKind::ScrollUp => self.scroll_by(-3),
             MouseEventKind::ScrollDown => self.scroll_by(3),
             MouseEventKind::Down(MouseButton::Left) => {
-                let col = mouse.column;
-                let row = mouse.row;
+                if self.try_start_log_selection(col, row) {
+                    return;
+                }
+                self.selection.clear();
                 for (rect, hit) in &self.hit_map.toolbar {
                     if contains(*rect, col, row) {
                         match hit {
@@ -586,14 +607,116 @@ impl OhmylogcatApp {
                         return;
                     }
                 }
-                if let Some(r) = self.hit_map.log_viewport {
-                    if contains(r, col, row) {
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some(pos) = self.mouse_to_log_pos(col, row) {
+                    if self.selection.dragging() {
+                        self.selection.extend_to(pos);
+                    } else if self.hit_map.log_viewport.is_some_and(|r| contains(r, col, row)) {
+                        self.selection.start(pos);
                         self.focus = Focus::Logs;
                     }
                 }
             }
+            MouseEventKind::Up(MouseButton::Left) => {
+                let was_dragging = self.selection.dragging();
+                self.selection.finish_drag();
+                if was_dragging && self.selection.has_extent() {
+                    self.copy_selection();
+                }
+            }
             _ => {}
         }
+    }
+
+    fn note_mouse(&mut self, col: u16, row: u16) {
+        self.last_mouse = Some((col, row));
+    }
+
+    fn try_start_log_selection(&mut self, col: u16, row: u16) -> bool {
+        let Some(r) = self.hit_map.log_viewport else {
+            return false;
+        };
+        if !contains(r, col, row) {
+            return false;
+        }
+        if let Some(pos) = self.mouse_to_log_pos(col, row) {
+            self.selection.start(pos);
+            self.focus = Focus::Logs;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn mouse_to_log_pos(&self, col: u16, row: u16) -> Option<LogPos> {
+        let area = self.hit_map.log_viewport?;
+        let row_count = self.engine.filtered_len();
+        let map = ViewportMap {
+            area,
+            scroll_offset: self.scroll_offset,
+            wrap_skip: self.wrap_skip,
+            col_offset: self.col_offset,
+            soft_wrap: self.soft_wrap,
+            viewport_width: self.viewport_width,
+            viewport_height: self.viewport_height,
+        };
+        mouse_to_log_pos(col, row, &map, |idx| {
+            self.engine
+                .filtered_get(idx)
+                .map(|e| format_log_line(&e))
+        }, row_count)
+    }
+
+    fn copy_selection(&mut self) -> bool {
+        if !self.selection.is_active() {
+            return false;
+        }
+        let Some(text) = self.selection.extract_text(|idx| {
+            self.engine
+                .filtered_get(idx)
+                .map(|e| format_log_line(&e))
+        }) else {
+            return false;
+        };
+        match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text)) {
+            Ok(()) => {
+                self.status_message = Some("Copied selection".into());
+                true
+            }
+            Err(e) => {
+                self.last_error = Some(format!("Copy failed: {e}"));
+                true
+            }
+        }
+    }
+
+    pub fn apply_pointer_shape(&mut self) {
+        let Some((col, row)) = self.last_mouse else {
+            return;
+        };
+        let shape = if self.modal.is_some() {
+            PointerShape::Default
+        } else if self
+            .hit_map
+            .log_viewport
+            .is_some_and(|r| contains(r, col, row))
+        {
+            PointerShape::Text
+        } else {
+            PointerShape::Default
+        };
+        if self.last_pointer == Some(shape) {
+            return;
+        }
+        if set_pointer_shape(shape).is_ok() {
+            self.last_pointer = Some(shape);
+        }
+    }
+
+    pub fn restore_pointer(&mut self) {
+        reset_pointer_shape();
+        self.last_pointer = None;
     }
 
     // --- actions ---
@@ -654,6 +777,7 @@ impl OhmylogcatApp {
         self.engine.clear_buffer();
         self.scroll_offset = 0;
         self.col_offset = 0;
+        self.selection.clear();
         if self.find.open {
             self.find.recompute(&self.engine);
         }
@@ -976,6 +1100,7 @@ impl OhmylogcatApp {
         };
         self.engine
             .set_filter(tag, message, self.filter_level);
+        self.selection.clear();
         if self.find.open {
             self.find.recompute(&self.engine);
         }
@@ -1025,6 +1150,7 @@ impl OhmylogcatApp {
                         self.find.on_dropped_front(n);
                     }
                     self.scroll_offset = self.scroll_offset.saturating_sub(n);
+                    self.selection.clear();
                 }
                 EngineEvent::Stats(stats) => {
                     self.stats = stats;
@@ -1071,6 +1197,8 @@ impl OhmylogcatApp {
         if self.modal.is_some() {
             self.draw_modal(frame, area);
         }
+
+        self.apply_pointer_shape();
     }
 
     fn draw_toolbar(&mut self, frame: &mut Frame, area: Rect) {
@@ -1239,20 +1367,16 @@ impl OhmylogcatApp {
                     if items.len() >= height {
                         break;
                     }
-                    let spans = if find_q.is_empty() {
-                        vec![Span::styled(
-                            chunk,
-                            Style::default().fg(base_color).add_modifier(
-                                if is_current && ci == 0 {
-                                    Modifier::REVERSED
-                                } else {
-                                    Modifier::empty()
-                                },
-                            ),
-                        )]
-                    } else {
-                        highlight_spans(&chunk, &find_q, base_color, is_current && ci == 0)
-                    };
+                    let line_char_start = ci * width;
+                    let spans = line_spans(
+                        &chunk,
+                        row_idx,
+                        line_char_start,
+                        base_color,
+                        &self.selection,
+                        &find_q,
+                        is_current && ci == 0,
+                    );
                     items.push(ListItem::new(Line::from(spans)));
                 }
             }
@@ -1268,18 +1392,15 @@ impl OhmylogcatApp {
                 let visible = truncate_chars(&sliced, self.viewport_width);
                 let base_color = level_color(entry.level);
                 let is_current = current_row == Some(row_idx);
-                let spans = if find_q.is_empty() {
-                    vec![Span::styled(
-                        visible,
-                        Style::default().fg(base_color).add_modifier(if is_current {
-                            Modifier::REVERSED
-                        } else {
-                            Modifier::empty()
-                        }),
-                    )]
-                } else {
-                    highlight_spans(&visible, &find_q, base_color, is_current)
-                };
+                let spans = line_spans(
+                    &visible,
+                    row_idx,
+                    self.col_offset,
+                    base_color,
+                    &self.selection,
+                    &find_q,
+                    is_current,
+                );
                 items.push(ListItem::new(Line::from(spans)));
             }
         }
@@ -1451,6 +1572,19 @@ impl OhmylogcatApp {
     }
 }
 
+fn is_copy_shortcut(key: &KeyEvent) -> bool {
+    if !matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
+        return false;
+    }
+    let m = key.modifiers;
+    // macOS Command (SUPER) / legacy META
+    if m.contains(KeyModifiers::SUPER) || m.contains(KeyModifiers::META) {
+        return true;
+    }
+    // Ctrl+C fallback when the terminal does not report Command
+    m.contains(KeyModifiers::CONTROL)
+}
+
 fn contains(rect: Rect, col: u16, row: u16) -> bool {
     col >= rect.x
         && col < rect.x.saturating_add(rect.width)
@@ -1513,47 +1647,6 @@ fn wrap_chunks(s: &str, width: usize) -> Vec<String> {
         .chunks(width)
         .map(|chunk| chunk.iter().collect())
         .collect()
-}
-
-fn highlight_spans(
-    text: &str,
-    query_lower: &str,
-    base: ratatui::style::Color,
-    is_current: bool,
-) -> Vec<Span<'static>> {
-    if query_lower.is_empty() {
-        return vec![Span::styled(text.to_string(), Style::default().fg(base))];
-    }
-
-    let chars: Vec<char> = text.chars().collect();
-    let lower_chars: Vec<char> = text.to_lowercase().chars().collect();
-    let q: Vec<char> = query_lower.chars().collect();
-    let mut spans = Vec::new();
-    let mut i = 0;
-    while i < chars.len() {
-        if i + q.len() <= chars.len() && lower_chars[i..i + q.len()] == q[..] {
-            let matched: String = chars[i..i + q.len()].iter().collect();
-            let mut style = Style::default()
-                .fg(ratatui::style::Color::Black)
-                .bg(ratatui::style::Color::Yellow);
-            if is_current {
-                style = style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
-            }
-            spans.push(Span::styled(matched, style));
-            i += q.len();
-        } else {
-            let mut style = Style::default().fg(base);
-            if is_current {
-                style = style.add_modifier(Modifier::REVERSED);
-            }
-            spans.push(Span::styled(chars[i].to_string(), style));
-            i += 1;
-        }
-    }
-    if spans.is_empty() {
-        spans.push(Span::styled(text.to_string(), Style::default().fg(base)));
-    }
-    spans
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

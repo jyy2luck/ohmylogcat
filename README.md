@@ -146,7 +146,10 @@ git push github v0.1.0
 | Enter / Shift+Enter | Find | Next / previous match |
 | ↑↓ / j k / PgUp PgDn | Logs | Scroll |
 | ←→ / h | Logs (wrap off) | Horizontal pan |
-| Mouse click / wheel | Anywhere | Toolbar hits + scroll (when terminal supports mouse) |
+| Drag (left button) | Log viewport | Select text (auto-copies on release) |
+| Cmd+C / Ctrl+C | Log viewport (selection active) | Copy selection to clipboard |
+| Mouse click / wheel | Toolbar / filters | Toolbar hits + scroll (when terminal supports mouse) |
+| Mouse hover | Log viewport / chrome | I-beam pointer over logs · default over toolbar/filters (OSC 22) |
 
 ## Configuration
 
