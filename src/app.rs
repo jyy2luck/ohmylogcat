@@ -11,7 +11,7 @@ use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
@@ -1179,20 +1179,26 @@ impl OhmylogcatApp {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1), // toolbar
+                Constraint::Length(1), // separator
                 Constraint::Length(1), // filters
+                Constraint::Length(1), // separator
                 Constraint::Length(find_h),
                 Constraint::Min(3),    // logs
+                Constraint::Length(1), // separator
                 Constraint::Length(1), // status
             ])
             .split(area);
 
         self.draw_toolbar(frame, chunks[0]);
-        self.draw_filters(frame, chunks[1]);
+        self.draw_separator(frame, chunks[1]);
+        self.draw_filters(frame, chunks[2]);
+        self.draw_separator(frame, chunks[3]);
         if self.find.open {
-            self.draw_find(frame, chunks[2]);
+            self.draw_find(frame, chunks[4]);
         }
-        self.draw_logs(frame, chunks[3]);
-        self.draw_status(frame, chunks[4]);
+        self.draw_logs(frame, chunks[5]);
+        self.draw_separator(frame, chunks[6]);
+        self.draw_status(frame, chunks[7]);
 
         if self.modal.is_some() {
             self.draw_modal(frame, area);
@@ -1251,6 +1257,14 @@ impl OhmylogcatApp {
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
     }
 
+    fn draw_separator(&self, frame: &mut Frame, area: Rect) {
+        let line = "─".repeat(area.width as usize);
+        frame.render_widget(
+            Paragraph::new(line).style(Style::default().fg(Color::DarkGray)),
+            area,
+        );
+    }
+
     fn draw_filters(&mut self, frame: &mut Frame, area: Rect) {
         let level_text = self
             .filter_level
@@ -1258,11 +1272,14 @@ impl OhmylogcatApp {
             .unwrap_or("Verbose");
 
         let summary_style = Style::default();
+        let shortcut_style = Style::default().add_modifier(Modifier::BOLD);
         let level_style = field_style(self.focus == Focus::Level);
 
-        let tag_label = format!("Tag:[{}] ", truncate_input(&self.filter_tag, 16));
-        let msg_label = format!("Message:[{}] ", truncate_input(&self.filter_message, 24));
-        let level_label = format!("Level:[{}]", level_text);
+        let tag_value = truncate_input(&self.filter_tag, 16);
+        let msg_value = truncate_input(&self.filter_message, 24);
+        let tag_label = format!("[t]Tag[{tag_value}] ");
+        let msg_label = format!("[m]Message[{msg_value}] ");
+        let level_label = format!("[l]Level[{level_text}]");
 
         let mut x = area.x;
         let tag_w = tag_label.chars().count() as u16;
@@ -1290,12 +1307,13 @@ impl OhmylogcatApp {
         });
 
         let line = Line::from(vec![
-            Span::styled(tag_label, summary_style),
-            Span::raw(" "),
-            Span::styled(msg_label, summary_style),
-            Span::raw(" "),
-            Span::styled(level_label, level_style),
-            Span::raw("  (t/m edit · l level · click Tag/Message)"),
+            Span::styled("[t]", shortcut_style),
+            Span::styled(format!("Tag[{tag_value}] "), summary_style),
+            Span::styled("[m]", shortcut_style),
+            Span::styled(format!("Message[{msg_value}] "), summary_style),
+            Span::styled("[l]", shortcut_style),
+            Span::styled(format!("Level[{level_text}]"), level_style),
+            Span::raw("  (click Tag/Message)"),
         ]);
         frame.render_widget(Paragraph::new(line), area);
     }

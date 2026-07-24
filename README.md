@@ -102,7 +102,7 @@ git push github v0.1.0
 ### Smoke checklist
 
 **macOS (Terminal / iTerm2)**
-- [ ] Launch shows toolbar / filters / log viewport / status bar
+- [ ] Launch shows toolbar / filters / log viewport / status bar with section dividers
 - [ ] Device modal (`d`), stream starts, Pause / Clear / Follow work
 - [ ] Tag / Message / Level filters; Find (`/`); Export path; Settings persist
 
