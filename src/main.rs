@@ -20,7 +20,7 @@ use crossterm::terminal::{
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
-use std::io::{self, stdout, Write};
+use std::io::{self, stdout};
 use std::panic;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -33,13 +33,14 @@ fn main() -> io::Result<()> {
     enable_raw_mode()?;
     let mut out = stdout();
     execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
-    if try_enable_keyboard_enhancement(&mut out)? {
+    let keyboard_enhancement = try_enable_keyboard_enhancement(&mut out)?;
+    if keyboard_enhancement {
         KEYBOARD_ENHANCEMENT_ENABLED.store(true, Ordering::SeqCst);
     }
     let backend = CrosstermBackend::new(out);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_app(&mut terminal);
+    let result = run_app(&mut terminal, keyboard_enhancement);
 
     restore_terminal(&mut terminal)?;
     result
@@ -55,14 +56,7 @@ fn try_enable_keyboard_enhancement(out: &mut io::Stdout) -> io::Result<bool> {
         )
     ) {
         Ok(()) => Ok(true),
-        Err(err) if err.kind() == io::ErrorKind::Unsupported => {
-            let _ = writeln!(
-                io::stderr(),
-                "Warning: keyboard enhancement unavailable in this terminal \
-                 (e.g. legacy conhost). Use Windows Terminal for full key support."
-            );
-            Ok(false)
-        }
+        Err(err) if err.kind() == io::ErrorKind::Unsupported => Ok(false),
         Err(err) => Err(err),
     }
 }
@@ -90,8 +84,11 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io
     Ok(())
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
-    let mut app = OhmylogcatApp::new();
+fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    keyboard_enhancement: bool,
+) -> io::Result<()> {
+    let mut app = OhmylogcatApp::new(keyboard_enhancement);
     let tick = Duration::from_millis(50);
 
     loop {

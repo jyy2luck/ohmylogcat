@@ -52,26 +52,25 @@ pub fn visible_chars(s: &str, col_offset: usize, max_width: usize) -> String {
         .collect()
 }
 
-/// Compute `(scroll_offset, wrap_skip)` so the last `viewport_height` display
-/// lines of `heights` (one height per filtered entry) are visible.
-pub fn scroll_bottom_position(heights: &[usize], viewport_height: usize) -> (usize, usize) {
-    let n = heights.len();
-    if n == 0 {
-        return (0, 0);
-    }
-    let height = viewport_height.max(1);
-    let mut idx = n - 1;
-    let mut lines_after = heights[idx].max(1);
-    while lines_after < height && idx > 0 {
-        idx -= 1;
-        lines_after += heights[idx].max(1);
-    }
-    (idx, lines_after.saturating_sub(height))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test-local mirror of the scroll-bottom algorithm used by `App::scroll_to_bottom`.
+    fn scroll_bottom_position(heights: &[usize], viewport_height: usize) -> (usize, usize) {
+        let n = heights.len();
+        if n == 0 {
+            return (0, 0);
+        }
+        let height = viewport_height.max(1);
+        let mut idx = n - 1;
+        let mut lines_after = heights[idx].max(1);
+        while lines_after < height && idx > 0 {
+            idx -= 1;
+            lines_after += heights[idx].max(1);
+        }
+        (idx, lines_after.saturating_sub(height))
+    }
 
     #[test]
     fn lazy_wrap_matches_count() {

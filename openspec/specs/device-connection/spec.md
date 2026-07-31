@@ -28,7 +28,7 @@ The system SHALL allow the user to select one device as the active logcat source
 
 ### Requirement: Detect adb availability
 
-The system SHALL verify that adb is executable at the configured path before streaming.
+The system SHALL resolve the adb executable path, then verify it by running a version check (`adb --version`) before device discovery and before log streaming. Path resolution alone (file exists) is not sufficient.
 
 #### Scenario: adb not found
 
@@ -39,4 +39,9 @@ The system SHALL verify that adb is executable at the configured path before str
 
 - **WHEN** adb responds successfully to a version check
 - **THEN** the system enables device discovery and log streaming
+
+#### Scenario: adb path resolves but version check fails
+
+- **WHEN** a path to adb is found but `adb --version` fails to execute or exits unsuccessfully
+- **THEN** the system displays an error and does not proceed with device discovery or log streaming
 

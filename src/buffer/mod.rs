@@ -61,11 +61,6 @@ impl RingBuffer {
         self.capacity
     }
 
-    /// Allocated slot capacity of the underlying storage (for tests / diagnostics).
-    pub fn allocated_capacity(&self) -> usize {
-        self.entries.capacity()
-    }
-
     pub fn set_capacity(&mut self, new_cap: usize) {
         let new_cap = new_cap.max(1);
         let entries: Vec<LogEntry> = self.entries.drain(..).collect();
@@ -83,20 +78,24 @@ impl RingBuffer {
     }
 }
 
-fn make_entry(pid: u32, tag: &str, msg: &str) -> LogEntry {
-    LogEntry {
-        timestamp: "07-17 12:00:00.000".into(),
-        pid,
-        tid: pid,
-        level: crate::parser::LogLevel::Info,
-        tag: tag.into(),
-        message: msg.into(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_entry(pid: u32, tag: &str, msg: &str) -> LogEntry {
+        LogEntry {
+            timestamp: "07-17 12:00:00.000".into(),
+            pid,
+            tid: pid,
+            level: crate::parser::LogLevel::Info,
+            tag: tag.into(),
+            message: msg.into(),
+        }
+    }
+
+    fn allocated_capacity(buf: &RingBuffer) -> usize {
+        buf.entries.capacity()
+    }
 
     #[test]
     fn test_push_and_iterate() {
@@ -151,9 +150,9 @@ mod tests {
         assert_eq!(buf.capacity(), 200_000);
         // Must not pre-allocate full-capacity empty slots.
         assert!(
-            buf.allocated_capacity() < 1_000,
+            allocated_capacity(&buf) < 1_000,
             "allocated {} slots for empty buffer",
-            buf.allocated_capacity()
+            allocated_capacity(&buf)
         );
 
         let mut buf = RingBuffer::new(50);
@@ -163,9 +162,9 @@ mod tests {
         buf.clear_compact();
         assert_eq!(buf.len(), 0);
         assert!(
-            buf.allocated_capacity() < 50,
+            allocated_capacity(&buf) < 50,
             "clear_compact should shrink storage, got {}",
-            buf.allocated_capacity()
+            allocated_capacity(&buf)
         );
     }
 

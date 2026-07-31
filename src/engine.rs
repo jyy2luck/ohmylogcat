@@ -319,10 +319,6 @@ impl Engine {
         Self::emit_from(self, EngineEvent::Stats(self.buffer_stats_self()));
     }
 
-    pub fn stats(&self) -> BufferStats {
-        self.buffer_stats_self()
-    }
-
     pub fn filtered_len(&self) -> usize {
         self.filtered_indices.lock().unwrap().len()
     }

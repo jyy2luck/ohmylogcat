@@ -18,11 +18,6 @@ impl TextInput {
         Self::default()
     }
 
-    pub fn from_text(text: String) -> Self {
-        let cursor = text.chars().count();
-        Self { text, cursor }
-    }
-
     pub fn set_cursor_end(&mut self) {
         self.cursor = self.text.chars().count();
     }
@@ -118,6 +113,11 @@ impl TextInput {
 mod tests {
     use super::*;
 
+    fn from_text(text: String) -> TextInput {
+        let cursor = text.chars().count();
+        TextInput { text, cursor }
+    }
+
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::empty())
     }
@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn insert_at_cursor() {
-        let mut input = TextInput::from_text("ab".into());
+        let mut input = from_text("ab".into());
         input.cursor = 1;
         assert!(input.handle_key(char_key('X')));
         assert_eq!(input.text, "aXb");
@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn backspace_at_cursor() {
-        let mut input = TextInput::from_text("abc".into());
+        let mut input = from_text("abc".into());
         input.cursor = 2;
         assert!(input.handle_key(key(KeyCode::Backspace)));
         assert_eq!(input.text, "ac");
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn delete_at_cursor() {
-        let mut input = TextInput::from_text("abc".into());
+        let mut input = from_text("abc".into());
         input.cursor = 1;
         assert!(input.handle_key(key(KeyCode::Delete)));
         assert_eq!(input.text, "ac");
@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn arrow_and_home_end() {
-        let mut input = TextInput::from_text("abc".into());
+        let mut input = from_text("abc".into());
         input.handle_key(key(KeyCode::Home));
         assert_eq!(input.cursor, 0);
         input.handle_key(key(KeyCode::Right));

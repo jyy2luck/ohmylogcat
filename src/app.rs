@@ -167,6 +167,8 @@ pub struct OhmylogcatApp {
     stats: BufferStats,
     last_error: Option<String>,
     status_message: Option<String>,
+    /// When set, `status_message` is cleared after this instant (ephemeral tip).
+    status_expires_at: Option<Instant>,
 
     auto_scroll: bool,
     soft_wrap: bool,
@@ -196,7 +198,7 @@ pub struct OhmylogcatApp {
 }
 
 impl OhmylogcatApp {
-    pub fn new() -> Self {
+    pub fn new(keyboard_enhancement: bool) -> Self {
         let rt = Runtime::new().expect("tokio runtime");
         let settings = load_settings();
         let theme = Theme::resolve(settings.theme);
@@ -218,6 +220,7 @@ impl OhmylogcatApp {
             },
             last_error: None,
             status_message: None,
+            status_expires_at: None,
             auto_scroll: settings.auto_scroll_to_end,
             soft_wrap: settings.soft_wrap,
             scroll_offset: 0,
@@ -242,8 +245,25 @@ impl OhmylogcatApp {
             settings,
             theme,
         };
+        if !keyboard_enhancement {
+            app.set_ephemeral_status(
+                "Tip: keyboard enhancement unavailable — use Windows Terminal for full key support"
+                    .into(),
+                Duration::from_secs(8),
+            );
+        }
         app.refresh_devices();
         app
+    }
+
+    fn set_ephemeral_status(&mut self, message: String, duration: Duration) {
+        self.status_message = Some(message);
+        self.status_expires_at = Some(Instant::now() + duration);
+    }
+
+    fn set_status(&mut self, message: String) {
+        self.status_message = Some(message);
+        self.status_expires_at = None;
     }
 
     fn runtime_handle(&self) -> tokio::runtime::Handle {
@@ -256,6 +276,13 @@ impl OhmylogcatApp {
 
     pub fn tick(&mut self) {
         self.drain_events();
+
+        if let Some(until) = self.status_expires_at {
+            if Instant::now() >= until {
+                self.status_message = None;
+                self.status_expires_at = None;
+            }
+        }
 
         if self.filter_dirty {
             let due = self
@@ -516,7 +543,7 @@ impl OhmylogcatApp {
             KeyCode::Enter => {
                 match self.engine.export_to_file(&path, filtered_only) {
                     Ok(()) => {
-                        self.status_message = Some(format!("Exported to {}", path));
+                        self.set_status(format!("Exported to {}", path));
                         self.last_error = None;
                     }
                     Err(e) => self.last_error = Some(e),
@@ -739,7 +766,7 @@ impl OhmylogcatApp {
         };
         match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text)) {
             Ok(()) => {
-                self.status_message = Some("Copied selection".into());
+                self.set_status("Copied selection".into());
                 true
             }
             Err(e) => {
@@ -1186,7 +1213,7 @@ impl OhmylogcatApp {
                 self.settings.theme = settings.theme;
                 self.theme = Theme::resolve(settings.theme);
                 self.engine.set_capacity(settings.buffer_capacity);
-                self.status_message = Some("Settings saved".into());
+                self.set_status("Settings saved".into());
                 self.close_modal();
             }
             Err(e) => self.settings_panel.status = Some(e),
@@ -1223,13 +1250,19 @@ impl OhmylogcatApp {
     fn refresh_devices(&mut self) {
         self.last_device_refresh = Instant::now();
         match adb::resolve_adb_path(self.settings.adb_path.as_deref()) {
-            Ok(path) => match adb::list_devices(&path) {
-                Ok(devices) => {
-                    self.devices = devices;
-                    self.last_error = None;
+            Ok(path) => {
+                if let Err(e) = adb::check_adb_version(&path) {
+                    self.last_error = Some(e);
+                    return;
                 }
-                Err(e) => self.last_error = Some(e),
-            },
+                match adb::list_devices(&path) {
+                    Ok(devices) => {
+                        self.devices = devices;
+                        self.last_error = None;
+                    }
+                    Err(e) => self.last_error = Some(e),
+                }
+            }
             Err(e) => self.last_error = Some(e),
         }
     }
@@ -1241,6 +1274,10 @@ impl OhmylogcatApp {
         };
         match adb::resolve_adb_path(self.settings.adb_path.as_deref()) {
             Ok(path) => {
+                if let Err(e) = adb::check_adb_version(&path) {
+                    self.last_error = Some(e);
+                    return;
+                }
                 self.engine
                     .start_stream(self.runtime_handle(), path, serial);
                 self.last_error = None;
@@ -1436,7 +1473,7 @@ impl OhmylogcatApp {
             Span::styled(format!("Message[{msg_value}] "), summary_style),
             Span::styled("[l]", shortcut_style),
             Span::styled(format!("Level[{level_text}]"), level_style),
-            Span::raw("  (click Tag/Message)"),
+            Span::styled("  (click Tag/Message)", summary_style),
         ]);
         frame.render_widget(Paragraph::new(line), area);
     }

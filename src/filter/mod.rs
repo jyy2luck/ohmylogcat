@@ -56,31 +56,20 @@ fn contains_ignore_case(haystack: &str, needle_lower: &str) -> bool {
     haystack.to_lowercase().contains(needle_lower)
 }
 
-/// Apply filter to an iterator of entries, returning matching entries.
-pub fn apply_filter<'a>(
-    entries: impl Iterator<Item = &'a LogEntry>,
-    criteria: &FilterCriteria,
-) -> Vec<LogEntry> {
-    entries
-        .filter(|e| criteria.matches(e))
-        .cloned()
-        .collect()
-}
-
-fn make_entry(level: LogLevel, tag: &str, msg: &str) -> LogEntry {
-    LogEntry {
-        timestamp: "07-17 12:00:00.000".into(),
-        pid: 1234,
-        tid: 5678,
-        level,
-        tag: tag.into(),
-        message: msg.into(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_entry(level: LogLevel, tag: &str, msg: &str) -> LogEntry {
+        LogEntry {
+            timestamp: "07-17 12:00:00.000".into(),
+            pid: 1234,
+            tid: 5678,
+            level,
+            tag: tag.into(),
+            message: msg.into(),
+        }
+    }
 
     #[test]
     fn test_no_filter_accepts_all() {
@@ -181,7 +170,11 @@ mod tests {
             tag_substring: Some("TagA".into()),
             ..Default::default()
         };
-        let filtered = apply_filter(entries.iter(), &criteria);
+        let filtered: Vec<_> = entries
+            .iter()
+            .filter(|e| criteria.matches(e))
+            .cloned()
+            .collect();
         assert_eq!(filtered.len(), 2);
         assert_eq!(filtered[0].message, "hello");
         assert_eq!(filtered[1].message, "error occurred");
