@@ -144,10 +144,15 @@ git push github v0.1.0
 | `/` or Ctrl/Cmd+F | Logs | Open Find |
 | `n` / `N` | Logs (find open) | Next / previous match |
 | Enter / Shift+Enter | Find | Next / previous match |
-| ↑↓ / j k / PgUp PgDn | Logs | Scroll |
-| ←→ / h | Logs (wrap off) | Horizontal pan |
-| Drag (left button) | Log viewport | Select text (auto-copies on release) |
+| ←↑↓→ | Logs | Move caret (viewport follows after keyboard moves) |
+| Shift+←↑↓→ / Shift+Home / Shift+End | Logs | Extend selection from caret |
+| Home / End | Logs | Caret to start / end of current logical line |
+| PgUp / PgDn | Logs | Move caret by one page (then ensure visible) |
+| Click | Log viewport | Place caret · clear selection |
+| Double-click / Triple-click | Log viewport | Select word (`[A-Za-z0-9_]`) / logical line (no copy) |
+| Drag (left button) | Log viewport | Select text (stays highlighted; does not copy) |
 | Cmd+C / Ctrl+C | Log viewport (selection active) | Copy selection to clipboard |
+| Mouse wheel | Log viewport | Scroll (caret may leave view until next keyboard move) |
 | Mouse click / wheel | Toolbar / filters | Toolbar hits + scroll (when terminal supports mouse) |
 | Mouse hover | Log viewport / chrome | I-beam pointer over logs · default over toolbar/filters (OSC 22) |
 

@@ -6,7 +6,12 @@ use crate::parser::LogLevel;
 use crate::settings::{
     load_settings, save_settings, BufferPreset, BufferStats, Settings,
 };
-use crate::ui::{format_log_line, line_spans, mouse_to_log_pos, reset_pointer_shape, set_pointer_shape, visible_chars, wrap_line_count, FindState, LogPos, PointerShape, TextInput, TextSelection, Theme, ThemePreference, ViewportMap, WrapChunks, TEXT_INPUT_CURSOR_STYLE};
+use crate::ui::{
+    clamp_log_pos, expand_line, expand_word, format_log_line, line_spans, log_pos_to_screen,
+    mouse_to_log_pos, reset_pointer_shape, set_pointer_shape, step_caret_horizontal, visible_chars,
+    wrap_line_count, FindState, LogPos, PointerShape, TextInput, TextSelection, Theme,
+    ThemePreference, ViewportMap, WrapChunks, TEXT_INPUT_CURSOR_STYLE,
+};
 use crossterm::cursor::SetCursorStyle;
 use crossterm::execute;
 use crossterm::event::{
@@ -25,6 +30,7 @@ use tokio::runtime::Runtime;
 
 const FILTER_DEBOUNCE: Duration = Duration::from_millis(200);
 const DEFAULT_EXPORT_NAME: &str = "ohmylogcat.log";
+const MULTI_CLICK_MS: u128 = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -194,9 +200,16 @@ pub struct OhmylogcatApp {
 
     hit_map: HitMap,
     selection: TextSelection,
+    /// Caret in the filtered log list; independent of selection endpoints.
+    caret: Option<LogPos>,
+    /// Preferred display column for Up/Down navigation.
+    caret_preferred_col: usize,
+    last_click_time: Option<Instant>,
+    last_click_screen: Option<(u16, u16)>,
+    click_count: u8,
     last_mouse: Option<(u16, u16)>,
     last_pointer: Option<PointerShape>,
-    last_text_input_focused: Option<bool>,
+    last_hardware_cursor_bar: Option<bool>,
     follow_dirty: bool,
     should_quit: bool,
 }
@@ -241,9 +254,14 @@ impl OhmylogcatApp {
             last_device_refresh: Instant::now() - Duration::from_secs(60),
             hit_map: HitMap::default(),
             selection: TextSelection::default(),
+            caret: None,
+            caret_preferred_col: 0,
+            last_click_time: None,
+            last_click_screen: None,
+            click_count: 0,
             last_mouse: None,
             last_pointer: None,
-            last_text_input_focused: None,
+            last_hardware_cursor_bar: None,
             follow_dirty: true,
             should_quit: false,
             settings,
@@ -305,6 +323,7 @@ impl OhmylogcatApp {
         }
 
         self.clamp_scroll();
+        self.seed_or_clamp_caret();
         // Follow scroll is applied in `draw_logs` after viewport size is known.
         // Doing it here used the previous frame's (or default) height/width and
         // left Wrap mode stuck on the start of a long line.
@@ -399,27 +418,24 @@ impl OhmylogcatApp {
                 self.focus = Focus::Level;
             }
             KeyCode::Tab => self.focus = Focus::Level,
-            KeyCode::Up | KeyCode::Char('k') => self.scroll_by(-1),
-            KeyCode::Down | KeyCode::Char('j') => self.scroll_by(1),
-            KeyCode::PageUp => self.scroll_by(-(self.viewport_height as isize)),
-            KeyCode::PageDown => self.scroll_by(self.viewport_height as isize),
-            KeyCode::Home => {
-                self.scroll_offset = 0;
-                self.disable_follow_if_needed();
+            KeyCode::Up => self.move_caret_vertical(-1, key.modifiers.contains(KeyModifiers::SHIFT)),
+            KeyCode::Down => self.move_caret_vertical(1, key.modifiers.contains(KeyModifiers::SHIFT)),
+            KeyCode::Left => self.move_caret_horizontal(-1, key.modifiers.contains(KeyModifiers::SHIFT)),
+            KeyCode::Right => self.move_caret_horizontal(1, key.modifiers.contains(KeyModifiers::SHIFT)),
+            KeyCode::PageUp => {
+                self.move_caret_vertical(
+                    -(self.viewport_height.max(1) as isize),
+                    key.modifiers.contains(KeyModifiers::SHIFT),
+                );
             }
-            KeyCode::End => {
-                self.scroll_to_bottom();
-                if !self.auto_scroll {
-                    self.auto_scroll = true;
-                    self.persist_display_prefs();
-                }
+            KeyCode::PageDown => {
+                self.move_caret_vertical(
+                    self.viewport_height.max(1) as isize,
+                    key.modifiers.contains(KeyModifiers::SHIFT),
+                );
             }
-            KeyCode::Left | KeyCode::Char('h') if !self.soft_wrap => {
-                self.col_offset = self.col_offset.saturating_sub(4);
-            }
-            KeyCode::Right if !self.soft_wrap => {
-                self.col_offset = self.col_offset.saturating_add(4);
-            }
+            KeyCode::Home => self.move_caret_line_bound(true, key.modifiers.contains(KeyModifiers::SHIFT)),
+            KeyCode::End => self.move_caret_line_bound(false, key.modifiers.contains(KeyModifiers::SHIFT)),
             KeyCode::Esc if self.find.open => {
                 self.find.close();
                 self.focus = Focus::Logs;
@@ -701,17 +717,24 @@ impl OhmylogcatApp {
                 if let Some(pos) = self.mouse_to_log_pos(col, row) {
                     if self.selection.dragging() {
                         self.selection.extend_to(pos);
+                        self.caret = Some(pos);
+                        self.caret_preferred_col = self.display_col_of(pos);
                     } else if self.hit_map.log_viewport.is_some_and(|r| contains(r, col, row)) {
-                        self.selection.start(pos);
-                        self.focus = Focus::Logs;
+                        // Only start a fresh drag from empty selection; keep
+                        // word/line multi-click ranges intact on micro-moves.
+                        if !self.selection.has_extent() {
+                            self.selection.start(pos);
+                            self.caret = Some(pos);
+                            self.caret_preferred_col = self.display_col_of(pos);
+                            self.focus = Focus::Logs;
+                        }
                     }
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                let was_dragging = self.selection.dragging();
                 self.selection.finish_drag();
-                if was_dragging && self.selection.has_extent() {
-                    self.copy_selection();
+                if !self.selection.has_extent() {
+                    self.selection.clear();
                 }
             }
             _ => {}
@@ -729,19 +752,101 @@ impl OhmylogcatApp {
         if !contains(r, col, row) {
             return false;
         }
-        if let Some(pos) = self.mouse_to_log_pos(col, row) {
-            self.selection.start(pos);
-            self.focus = Focus::Logs;
-            true
-        } else {
-            false
+        let Some(pos) = self.mouse_to_log_pos(col, row) else {
+            return false;
+        };
+        self.focus = Focus::Logs;
+        let count = self.register_multi_click(col, row);
+        match count {
+            2 => {
+                self.select_word_at(pos);
+            }
+            3 => {
+                self.select_line_at(pos);
+            }
+            _ => {
+                self.caret = Some(pos);
+                self.caret_preferred_col = self.display_col_of(pos);
+                self.selection.clear();
+                self.selection.start(pos);
+            }
         }
+        true
+    }
+
+    fn register_multi_click(&mut self, col: u16, row: u16) -> u8 {
+        let now = Instant::now();
+        let near = self
+            .last_click_screen
+            .is_some_and(|(c, r)| c.abs_diff(col) <= 1 && r.abs_diff(row) <= 1);
+        let quick = self
+            .last_click_time
+            .is_some_and(|t| now.duration_since(t).as_millis() <= MULTI_CLICK_MS);
+        if near && quick {
+            self.click_count = match self.click_count {
+                1 => 2,
+                2 => 3,
+                _ => 1,
+            };
+        } else {
+            self.click_count = 1;
+        }
+        self.last_click_time = Some(now);
+        self.last_click_screen = Some((col, row));
+        self.click_count
+    }
+
+    fn select_word_at(&mut self, pos: LogPos) {
+        let Some(line) = self.formatted_line_at(pos.row) else {
+            return;
+        };
+        let (start, end) = expand_word(&line, pos.col);
+        let anchor = LogPos {
+            row: pos.row,
+            col: start,
+        };
+        let cursor = LogPos {
+            row: pos.row,
+            col: end,
+        };
+        self.selection.set_range(anchor, cursor);
+        self.caret = Some(cursor);
+        self.caret_preferred_col = self.display_col_of(cursor);
+    }
+
+    fn select_line_at(&mut self, pos: LogPos) {
+        let Some(line) = self.formatted_line_at(pos.row) else {
+            return;
+        };
+        let (start, end) = expand_line(&line);
+        let anchor = LogPos {
+            row: pos.row,
+            col: start,
+        };
+        let cursor = LogPos {
+            row: pos.row,
+            col: end,
+        };
+        self.selection.set_range(anchor, cursor);
+        self.caret = Some(cursor);
+        self.caret_preferred_col = self.display_col_of(cursor);
     }
 
     fn mouse_to_log_pos(&self, col: u16, row: u16) -> Option<LogPos> {
         let area = self.hit_map.log_viewport?;
         let row_count = self.engine.filtered_len();
-        let map = ViewportMap {
+        let map = self.viewport_map(area);
+        mouse_to_log_pos(
+            col,
+            row,
+            &map,
+            |idx| self.formatted_line_at(idx),
+            row_count,
+        )
+    }
+
+    fn viewport_map(&self, area: Rect) -> ViewportMap {
+        ViewportMap {
             area,
             scroll_offset: self.scroll_offset,
             wrap_skip: self.wrap_skip,
@@ -749,23 +854,18 @@ impl OhmylogcatApp {
             soft_wrap: self.soft_wrap,
             viewport_width: self.viewport_width,
             viewport_height: self.viewport_height,
-        };
-        mouse_to_log_pos(col, row, &map, |idx| {
-            self.engine
-                .filtered_get(idx)
-                .map(|e| format_log_line(&e))
-        }, row_count)
+        }
+    }
+
+    fn formatted_line_at(&self, idx: usize) -> Option<String> {
+        self.engine.filtered_get(idx).map(|e| format_log_line(&e))
     }
 
     fn copy_selection(&mut self) -> bool {
-        if !self.selection.is_active() {
+        if !self.selection.has_extent() {
             return false;
         }
-        let Some(text) = self.selection.extract_text(|idx| {
-            self.engine
-                .filtered_get(idx)
-                .map(|e| format_log_line(&e))
-        }) else {
+        let Some(text) = self.selection.extract_text(|idx| self.formatted_line_at(idx)) else {
             return false;
         };
         match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text)) {
@@ -814,17 +914,24 @@ impl OhmylogcatApp {
     }
 
     fn sync_terminal_cursor_style(&mut self) {
-        let focused = self.text_input_focused();
-        if self.last_text_input_focused == Some(focused) {
+        let bar = self.hardware_cursor_bar_active();
+        if self.last_hardware_cursor_bar == Some(bar) {
             return;
         }
-        self.last_text_input_focused = Some(focused);
-        let style = if focused {
+        self.last_hardware_cursor_bar = Some(bar);
+        let style = if bar {
             TEXT_INPUT_CURSOR_STYLE
         } else {
             SetCursorStyle::DefaultUserShape
         };
         let _ = execute!(io::stdout(), style);
+    }
+
+    fn hardware_cursor_bar_active(&self) -> bool {
+        if self.text_input_focused() {
+            return true;
+        }
+        self.log_caret_screen_pos().is_some()
     }
 
     fn text_input_focused(&self) -> bool {
@@ -833,6 +940,20 @@ impl OhmylogcatApp {
             Focus::Modal => matches!(self.modal, Some(ModalKind::FilterEdit { .. })),
             _ => false,
         }
+    }
+
+    fn log_caret_screen_pos(&self) -> Option<(u16, u16)> {
+        if self.focus != Focus::Logs || self.text_input_focused() {
+            return None;
+        }
+        let caret = self.caret?;
+        let area = self.hit_map.log_viewport?;
+        let row_count = self.engine.filtered_len();
+        if row_count == 0 {
+            return None;
+        }
+        let map = self.viewport_map(area);
+        log_pos_to_screen(caret, &map, |idx| self.formatted_line_at(idx), row_count)
     }
 
     pub fn restore_pointer(&mut self) {
@@ -902,10 +1023,295 @@ impl OhmylogcatApp {
         self.engine.clear_buffer();
         self.scroll_offset = 0;
         self.col_offset = 0;
+        self.wrap_skip = 0;
         self.selection.clear();
+        self.caret = None;
+        self.caret_preferred_col = 0;
         if self.find.open {
             self.find.recompute(&self.engine);
         }
+    }
+
+    fn seed_or_clamp_caret(&mut self) {
+        let n = self.engine.filtered_len();
+        if n == 0 {
+            self.caret = None;
+            return;
+        }
+        let seeding = self.caret.is_none();
+        let pos = match self.caret {
+            Some(c) => c,
+            None => LogPos {
+                row: self.scroll_offset.min(n - 1),
+                col: 0,
+            },
+        };
+        self.caret = clamp_log_pos(pos, n, |idx| self.formatted_line_at(idx));
+        if seeding {
+            if let Some(c) = self.caret {
+                self.caret_preferred_col = self.display_col_of(c);
+            }
+        }
+    }
+
+    fn display_col_of(&self, pos: LogPos) -> usize {
+        if self.soft_wrap {
+            pos.col % self.viewport_width.max(1)
+        } else {
+            pos.col
+        }
+    }
+
+    fn line_len_at(&self, row: usize) -> usize {
+        self.formatted_line_at(row)
+            .map(|s| s.chars().count())
+            .unwrap_or(0)
+    }
+
+    fn clamp_col_for_row(&self, row: usize, preferred: usize) -> usize {
+        let len = self.line_len_at(row);
+        if len == 0 {
+            0
+        } else {
+            preferred.min(len - 1)
+        }
+    }
+
+    fn apply_caret_move(&mut self, old: LogPos, new: LogPos, extend: bool) {
+        if extend {
+            if !self.selection.has_extent() {
+                self.selection.set_range(old, new);
+            } else {
+                self.selection.extend_to(new);
+            }
+        } else {
+            self.selection.clear();
+        }
+        self.caret = Some(new);
+        self.caret_preferred_col = self.display_col_of(new);
+        self.ensure_caret_visible();
+        self.disable_follow_if_needed();
+    }
+
+    fn move_caret_horizontal(&mut self, delta: isize, extend: bool) {
+        self.seed_or_clamp_caret();
+        let Some(old) = self.caret else {
+            return;
+        };
+        let n = self.engine.filtered_len();
+        let new = step_caret_horizontal(old, delta, n, |row| self.line_len_at(row));
+        if new != old || extend {
+            self.apply_caret_move(old, new, extend);
+        } else {
+            self.ensure_caret_visible();
+        }
+    }
+
+    fn move_caret_line_bound(&mut self, home: bool, extend: bool) {
+        self.seed_or_clamp_caret();
+        let Some(old) = self.caret else {
+            return;
+        };
+        let col = if home {
+            0
+        } else {
+            self.line_len_at(old.row).saturating_sub(1)
+        };
+        let new = LogPos { row: old.row, col };
+        self.apply_caret_move(old, new, extend);
+    }
+
+    fn move_caret_vertical(&mut self, delta_rows: isize, extend: bool) {
+        self.seed_or_clamp_caret();
+        let Some(old) = self.caret else {
+            return;
+        };
+        let preferred = self.caret_preferred_col;
+        let new = if self.soft_wrap {
+            self.move_caret_vertical_wrapped(old, delta_rows, preferred)
+        } else {
+            self.move_caret_vertical_nowrap(old, delta_rows, preferred)
+        };
+        // Preserve preferred column across short lines.
+        self.caret_preferred_col = preferred;
+        self.apply_caret_move(old, new, extend);
+        self.caret_preferred_col = preferred;
+    }
+
+    fn move_caret_vertical_nowrap(&self, old: LogPos, delta_rows: isize, preferred: usize) -> LogPos {
+        let n = self.engine.filtered_len();
+        if n == 0 {
+            return old;
+        }
+        let row = if delta_rows < 0 {
+            old.row.saturating_sub((-delta_rows) as usize)
+        } else {
+            (old.row + delta_rows as usize).min(n - 1)
+        };
+        LogPos {
+            row,
+            col: self.clamp_col_for_row(row, preferred),
+        }
+    }
+
+    fn move_caret_vertical_wrapped(
+        &self,
+        old: LogPos,
+        delta_rows: isize,
+        preferred: usize,
+    ) -> LogPos {
+        let n = self.engine.filtered_len();
+        if n == 0 || delta_rows == 0 {
+            return old;
+        }
+        let width = self.viewport_width.max(1);
+        let mut row = old.row;
+        let mut chunk = old.col / width;
+        if delta_rows < 0 {
+            let mut left = (-delta_rows) as usize;
+            while left > 0 {
+                if chunk > 0 {
+                    chunk -= 1;
+                    left -= 1;
+                } else if row > 0 {
+                    row -= 1;
+                    let h = self.entry_wrap_height(row, width).max(1);
+                    chunk = h.saturating_sub(1);
+                    left -= 1;
+                } else {
+                    break;
+                }
+            }
+        } else {
+            let mut left = delta_rows as usize;
+            while left > 0 {
+                let h = self.entry_wrap_height(row, width).max(1);
+                if chunk + 1 < h {
+                    chunk += 1;
+                    left -= 1;
+                } else if row + 1 < n {
+                    row += 1;
+                    chunk = 0;
+                    left -= 1;
+                } else {
+                    break;
+                }
+            }
+        }
+        let line_len = self.line_len_at(row);
+        let col = if line_len == 0 {
+            0
+        } else {
+            let chunk_start = chunk * width;
+            let max_in_chunk = (line_len - chunk_start).min(width).saturating_sub(1);
+            chunk_start + preferred.min(max_in_chunk)
+        };
+        LogPos { row, col }
+    }
+
+    fn ensure_caret_visible(&mut self) {
+        let Some(caret) = self.caret else {
+            return;
+        };
+        let n = self.engine.filtered_len();
+        if n == 0 {
+            return;
+        }
+
+        if self.log_pos_vertically_visible(caret) {
+            // ok
+        } else if self.caret_is_above_viewport(caret) {
+            if self.soft_wrap {
+                let width = self.viewport_width.max(1);
+                self.scroll_offset = caret.row;
+                self.wrap_skip = caret.col / width;
+            } else {
+                self.scroll_offset = caret.row;
+            }
+        } else {
+            // Below viewport: place caret at bottom of view.
+            if self.soft_wrap {
+                let width = self.viewport_width.max(1);
+                self.scroll_offset = caret.row;
+                self.wrap_skip = caret.col / width;
+                let up = (self.viewport_height.max(1) - 1) as isize;
+                self.scroll_by_wrapped(-up);
+            } else {
+                let h = self.viewport_height.max(1);
+                self.scroll_offset = caret.row.saturating_add(1).saturating_sub(h);
+            }
+        }
+        self.clamp_scroll();
+
+        if !self.soft_wrap {
+            let w = self.viewport_width.max(1);
+            if caret.col < self.col_offset {
+                self.col_offset = caret.col;
+            } else if caret.col >= self.col_offset + w {
+                self.col_offset = caret.col + 1 - w;
+            }
+        }
+    }
+
+    fn caret_is_above_viewport(&self, caret: LogPos) -> bool {
+        if caret.row < self.scroll_offset {
+            return true;
+        }
+        if caret.row > self.scroll_offset {
+            return false;
+        }
+        if self.soft_wrap {
+            let width = self.viewport_width.max(1);
+            caret.col / width < self.wrap_skip
+        } else {
+            false
+        }
+    }
+
+    fn log_pos_vertically_visible(&self, pos: LogPos) -> bool {
+        let Some(area) = self.hit_map.log_viewport else {
+            // Viewport unknown yet — treat nowrap row window as authority.
+            if self.soft_wrap {
+                return pos.row == self.scroll_offset;
+            }
+            let h = self.viewport_height.max(1);
+            return pos.row >= self.scroll_offset && pos.row < self.scroll_offset + h;
+        };
+        let row_count = self.engine.filtered_len();
+        let map = self.viewport_map(area);
+        // Visible if any screen mapping exists ignoring horizontal pan.
+        if self.soft_wrap {
+            log_pos_to_screen(pos, &map, |idx| self.formatted_line_at(idx), row_count).is_some()
+                || self.log_pos_on_screen_vertically_wrapped(pos)
+        } else {
+            pos.row >= self.scroll_offset
+                && pos.row < self.scroll_offset + self.viewport_height.max(1)
+        }
+    }
+
+    fn log_pos_on_screen_vertically_wrapped(&self, pos: LogPos) -> bool {
+        let width = self.viewport_width.max(1);
+        let row_count = self.engine.filtered_len();
+        let mut display_row = 0usize;
+        let mut idx = self.scroll_offset;
+        let mut skip = self.wrap_skip;
+        while idx < row_count && display_row < self.viewport_height {
+            let h = self.entry_wrap_height(idx, width).max(1);
+            let start_chunk = skip;
+            let chunks_shown = h.saturating_sub(start_chunk);
+            if idx == pos.row {
+                let chunk = pos.col / width;
+                if chunk >= start_chunk && chunk < start_chunk + chunks_shown.min(self.viewport_height - display_row)
+                {
+                    return true;
+                }
+                return false;
+            }
+            display_row += chunks_shown.min(self.viewport_height - display_row);
+            skip = 0;
+            idx += 1;
+        }
+        false
     }
 
     fn toggle_follow(&mut self) {
@@ -1249,6 +1655,7 @@ impl OhmylogcatApp {
             self.find.recompute(&self.engine);
         }
         self.clamp_scroll();
+        self.seed_or_clamp_caret();
     }
 
     fn refresh_devices(&mut self) {
@@ -1613,6 +2020,12 @@ impl OhmylogcatApp {
         }
 
         frame.render_widget(List::new(items), area);
+
+        if !self.text_input_focused() {
+            if let Some((x, y)) = self.log_caret_screen_pos() {
+                frame.set_cursor_position((x, y));
+            }
+        }
     }
 
     fn draw_status(&self, frame: &mut Frame, area: Rect) {

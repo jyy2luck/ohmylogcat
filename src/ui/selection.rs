@@ -1,4 +1,4 @@
-//! Mouse text selection in the log viewport.
+//! Mouse text selection and caret geometry in the log viewport.
 
 use crate::ui::display::WrapChunks;
 use crate::ui::Theme;
@@ -43,6 +43,13 @@ impl TextSelection {
 
     pub fn extend_to(&mut self, pos: LogPos) {
         self.cursor = Some(pos);
+    }
+
+    /// Set a non-dragging selection range (word/line click, keyboard Shift).
+    pub fn set_range(&mut self, anchor: LogPos, cursor: LogPos) {
+        self.anchor = Some(anchor);
+        self.cursor = Some(cursor);
+        self.dragging = false;
     }
 
     pub fn finish_drag(&mut self) {
@@ -211,6 +218,194 @@ fn mouse_to_log_pos_wrapped(
     None
 }
 
+/// Map a log caret position to a screen cell. Returns `None` when off-screen.
+pub fn log_pos_to_screen(
+    pos: LogPos,
+    map: &ViewportMap,
+    line_at: impl Fn(usize) -> Option<String>,
+    row_count: usize,
+) -> Option<(u16, u16)> {
+    if row_count == 0 || pos.row >= row_count {
+        return None;
+    }
+    if map.soft_wrap {
+        log_pos_to_screen_wrapped(pos, map, line_at, row_count)
+    } else {
+        log_pos_to_screen_nowrap(pos, map, line_at)
+    }
+}
+
+fn log_pos_to_screen_nowrap(
+    pos: LogPos,
+    map: &ViewportMap,
+    line_at: impl Fn(usize) -> Option<String>,
+) -> Option<(u16, u16)> {
+    if pos.row < map.scroll_offset {
+        return None;
+    }
+    let display_row = pos.row - map.scroll_offset;
+    if display_row >= map.viewport_height {
+        return None;
+    }
+    let line = line_at(pos.row)?;
+    let line_len = line.chars().count();
+    let col = if line_len == 0 {
+        0
+    } else {
+        pos.col.min(line_len - 1)
+    };
+    if col < map.col_offset {
+        return None;
+    }
+    let col_in = col - map.col_offset;
+    if col_in >= map.viewport_width.max(1) {
+        return None;
+    }
+    let x = map.area.x.saturating_add(col_in as u16);
+    let y = map.area.y.saturating_add(display_row as u16);
+    Some((x, y))
+}
+
+fn log_pos_to_screen_wrapped(
+    pos: LogPos,
+    map: &ViewportMap,
+    line_at: impl Fn(usize) -> Option<String>,
+    row_count: usize,
+) -> Option<(u16, u16)> {
+    let width = map.viewport_width.max(1);
+    let mut display_row = 0usize;
+    let mut idx = map.scroll_offset;
+    let mut skip = map.wrap_skip;
+
+    while idx < row_count && display_row < map.viewport_height {
+        let line = line_at(idx)?;
+        let line_len = line.chars().count();
+        if line_len == 0 {
+            if skip > 0 {
+                skip -= 1;
+            } else {
+                if idx == pos.row {
+                    let x = map.area.x;
+                    let y = map.area.y.saturating_add(display_row as u16);
+                    return Some((x, y));
+                }
+                display_row += 1;
+            }
+            idx += 1;
+            continue;
+        }
+        for (ci, chunk) in WrapChunks::new(&line, width).enumerate() {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            let chunk_start = ci * width;
+            let chunk_chars = chunk.chars().count();
+            let chunk_end = chunk_start + chunk_chars.saturating_sub(1);
+            if idx == pos.row && pos.col >= chunk_start && pos.col <= chunk_end {
+                let col_in = (pos.col - chunk_start).min(chunk_chars.saturating_sub(1));
+                let x = map.area.x.saturating_add(col_in as u16);
+                let y = map.area.y.saturating_add(display_row as u16);
+                return Some((x, y));
+            }
+            display_row += 1;
+            if display_row >= map.viewport_height {
+                return None;
+            }
+        }
+        idx += 1;
+    }
+    None
+}
+
+/// Word characters for double-click expand: ASCII letters, digits, underscore.
+pub fn is_word_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// Inclusive `[start, end]` columns for the word (or single non-word char) at `col`.
+pub fn expand_word(line: &str, col: usize) -> (usize, usize) {
+    let chars: Vec<char> = line.chars().collect();
+    if chars.is_empty() {
+        return (0, 0);
+    }
+    let col = col.min(chars.len() - 1);
+    if !is_word_char(chars[col]) {
+        return (col, col);
+    }
+    let mut start = col;
+    while start > 0 && is_word_char(chars[start - 1]) {
+        start -= 1;
+    }
+    let mut end = col;
+    while end + 1 < chars.len() && is_word_char(chars[end + 1]) {
+        end += 1;
+    }
+    (start, end)
+}
+
+/// Inclusive columns covering the whole logical line.
+pub fn expand_line(line: &str) -> (usize, usize) {
+    let len = line.chars().count();
+    if len == 0 {
+        (0, 0)
+    } else {
+        (0, len - 1)
+    }
+}
+
+/// Clamp a caret into a valid position for the filtered list.
+pub fn clamp_log_pos(
+    pos: LogPos,
+    row_count: usize,
+    line_at: impl Fn(usize) -> Option<String>,
+) -> Option<LogPos> {
+    if row_count == 0 {
+        return None;
+    }
+    let row = pos.row.min(row_count - 1);
+    let line = line_at(row)?;
+    let len = line.chars().count();
+    let col = if len == 0 { 0 } else { pos.col.min(len - 1) };
+    Some(LogPos { row, col })
+}
+
+/// Step caret left/right across logical line boundaries.
+pub fn step_caret_horizontal(
+    pos: LogPos,
+    delta: isize,
+    row_count: usize,
+    line_len_at: impl Fn(usize) -> usize,
+) -> LogPos {
+    if row_count == 0 || delta == 0 {
+        return pos;
+    }
+    let mut row = pos.row.min(row_count - 1);
+    let mut col = pos.col;
+    if delta < 0 {
+        if col > 0 {
+            col -= 1;
+        } else if row > 0 {
+            row -= 1;
+            col = line_len_at(row).saturating_sub(1);
+        }
+    } else {
+        let len = line_len_at(row);
+        if len == 0 {
+            if row + 1 < row_count {
+                row += 1;
+                col = 0;
+            }
+        } else if col + 1 < len {
+            col += 1;
+        } else if row + 1 < row_count {
+            row += 1;
+            col = 0;
+        }
+    }
+    LogPos { row, col }
+}
+
 /// Build styled spans for a text segment with selection and optional find highlights.
 pub fn line_spans(
     text: &str,
@@ -336,6 +531,27 @@ fn contains(rect: Rect, col: u16, row: u16) -> bool {
 mod tests {
     use super::*;
 
+    fn lines<'a>(rows: &'a [&'a str]) -> impl Fn(usize) -> Option<String> + 'a {
+        move |i| rows.get(i).map(|s| (*s).to_string())
+    }
+
+    fn map(soft_wrap: bool, scroll: usize, wrap_skip: usize, col_offset: usize) -> ViewportMap {
+        ViewportMap {
+            area: Rect {
+                x: 2,
+                y: 3,
+                width: 10,
+                height: 5,
+            },
+            scroll_offset: scroll,
+            wrap_skip,
+            col_offset,
+            soft_wrap,
+            viewport_width: 10,
+            viewport_height: 5,
+        }
+    }
+
     #[test]
     fn normalized_range_orders_positions() {
         let mut sel = TextSelection::default();
@@ -359,5 +575,113 @@ mod tests {
             })
             .unwrap();
         assert_eq!(text, "hello\nwor");
+    }
+
+    #[test]
+    fn log_pos_to_screen_nowrap_roundtrip() {
+        let rows = ["abcdefghijXXXX", "second"];
+        let m = map(false, 0, 0, 0);
+        let pos = mouse_to_log_pos(2 + 3, 3 + 1, &m, lines(&rows), 2).unwrap();
+        assert_eq!(pos, LogPos { row: 1, col: 3 });
+        assert_eq!(
+            log_pos_to_screen(pos, &m, lines(&rows), 2),
+            Some((2 + 3, 3 + 1))
+        );
+    }
+
+    #[test]
+    fn log_pos_to_screen_nowrap_respects_col_offset() {
+        let rows = ["abcdefghijklmnop"];
+        let m = map(false, 0, 0, 4);
+        let pos = LogPos { row: 0, col: 6 };
+        assert_eq!(
+            log_pos_to_screen(pos, &m, lines(&rows), 1),
+            Some((2 + 2, 3))
+        );
+        assert_eq!(
+            log_pos_to_screen(LogPos { row: 0, col: 2 }, &m, lines(&rows), 1),
+            None
+        );
+    }
+
+    #[test]
+    fn log_pos_to_screen_wrapped_edges() {
+        // width 10: "0123456789ABCDEF" -> chunk0 cols 0-9, chunk1 cols 10-15
+        let rows = ["0123456789ABCDEF"];
+        let m = map(true, 0, 0, 0);
+        assert_eq!(
+            log_pos_to_screen(LogPos { row: 0, col: 0 }, &m, lines(&rows), 1),
+            Some((2, 3))
+        );
+        assert_eq!(
+            log_pos_to_screen(LogPos { row: 0, col: 9 }, &m, lines(&rows), 1),
+            Some((2 + 9, 3))
+        );
+        assert_eq!(
+            log_pos_to_screen(LogPos { row: 0, col: 10 }, &m, lines(&rows), 1),
+            Some((2, 3 + 1))
+        );
+        let m_skip = map(true, 0, 1, 0);
+        assert_eq!(
+            log_pos_to_screen(LogPos { row: 0, col: 10 }, &m_skip, lines(&rows), 1),
+            Some((2, 3))
+        );
+        assert_eq!(
+            log_pos_to_screen(LogPos { row: 0, col: 0 }, &m_skip, lines(&rows), 1),
+            None
+        );
+    }
+
+    #[test]
+    fn expand_word_identifier_and_non_word() {
+        assert_eq!(expand_word("foo MyApp_1 bar", 6), (4, 10));
+        assert_eq!(expand_word("a=b", 1), (1, 1));
+        assert_eq!(expand_word("", 0), (0, 0));
+    }
+
+    #[test]
+    fn expand_line_covers_full_text() {
+        assert_eq!(expand_line("hello"), (0, 4));
+        assert_eq!(expand_line(""), (0, 0));
+    }
+
+    #[test]
+    fn clamp_log_pos_shrinks() {
+        let rows = ["ab", "cdef"];
+        assert_eq!(
+            clamp_log_pos(LogPos { row: 9, col: 99 }, 2, lines(&rows)),
+            Some(LogPos { row: 1, col: 3 })
+        );
+        assert_eq!(clamp_log_pos(LogPos { row: 0, col: 0 }, 0, lines(&rows)), None);
+    }
+
+    #[test]
+    fn step_caret_horizontal_crosses_line_bounds() {
+        let lens = |row: usize| match row {
+            0 => 3,
+            1 => 1,
+            2 => 0,
+            _ => 0,
+        };
+        // Right from end of line 0 -> start of line 1
+        assert_eq!(
+            step_caret_horizontal(LogPos { row: 0, col: 2 }, 1, 3, lens),
+            LogPos { row: 1, col: 0 }
+        );
+        // Left from start of line 1 -> end of line 0
+        assert_eq!(
+            step_caret_horizontal(LogPos { row: 1, col: 0 }, -1, 3, lens),
+            LogPos { row: 0, col: 2 }
+        );
+        // Empty buffer: unchanged
+        assert_eq!(
+            step_caret_horizontal(LogPos { row: 0, col: 0 }, 1, 0, lens),
+            LogPos { row: 0, col: 0 }
+        );
+        // At buffer start, Left stays
+        assert_eq!(
+            step_caret_horizontal(LogPos { row: 0, col: 0 }, -1, 3, lens),
+            LogPos { row: 0, col: 0 }
+        );
     }
 }
