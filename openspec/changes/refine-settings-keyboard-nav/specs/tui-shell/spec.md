@@ -1,0 +1,61 @@
+## ADDED Requirements
+
+### Requirement: Settings modal keyboard navigation
+
+The Settings modal SHALL use vertical arrow keys to move focus among visible settings rows and horizontal arrow keys to adjust cycle-type fields. The modal SHALL display a help line at the top documenting move, adjust, text entry, save, and cancel bindings. Focus SHALL always rest on a visible row; the Custom capacity row SHALL be included in navigation only when the buffer preset is Custom.
+
+#### Scenario: Move focus with vertical keys
+
+- **WHEN** the Settings modal is open and the user presses Up, Down, `k`, or `j`
+- **THEN** the focus cursor moves to the previous or next visible settings row and the `>` marker follows the focused row
+
+#### Scenario: Adjust preset with horizontal keys
+
+- **WHEN** the Settings modal is open, buffer preset is focused, and the user presses Left, Right, `h`, or `l`
+- **THEN** the buffer preset cycles backward or forward through available presets
+
+#### Scenario: Adjust theme with horizontal keys
+
+- **WHEN** the Settings modal is open, theme is focused, and the user presses Left, Right, `h`, or `l`
+- **THEN** the theme preference cycles backward or forward
+
+#### Scenario: Text fields use direct typing
+
+- **WHEN** the Settings modal is open, ADB path or Custom capacity is focused, and the user types printable characters or presses Backspace
+- **THEN** the focused text field is edited append-only and Left/Right do not change the field value
+
+#### Scenario: Custom row hidden from navigation
+
+- **WHEN** the Settings modal is open and the buffer preset is not Custom
+- **THEN** Up/Down navigation skips the Custom capacity row and focus never rests on a row that is not rendered
+
+#### Scenario: Focus re-anchors when Custom row hides
+
+- **WHEN** the Settings modal is open, Custom capacity is focused, and the user cycles preset away from Custom
+- **THEN** focus moves to an adjacent visible row (preset or theme) and the Custom row is no longer focused
+
+#### Scenario: Help line documents controls
+
+- **WHEN** the Settings modal is rendered
+- **THEN** the first content line documents vertical move, horizontal adjust, text entry, Enter save, and Esc cancel
+
+#### Scenario: Save and cancel unchanged
+
+- **WHEN** the Settings modal is open and the user presses Enter or Esc
+- **THEN** settings are persisted and the modal closes, or the modal closes without saving, per existing Settings save behavior
+
+## MODIFIED Requirements
+
+### Requirement: Modal panels for settings and path prompts
+
+The system SHALL present Settings, export path entry, and Tag/Message filter editing as in-TUI modal panels rather than native OS GUI dialogs. The Settings modal SHALL follow the Settings modal keyboard navigation requirement.
+
+#### Scenario: Open settings modal
+
+- **WHEN** the user opens Settings from the toolbar or shortcut
+- **THEN** a modal panel shows adb path and buffer configuration controls editable in the terminal with keyboard navigation help visible at the top
+
+#### Scenario: Open tag filter modal from filter row
+
+- **WHEN** the user activates Tag filter edit from the filter row
+- **THEN** an in-TUI modal panel provides Tag filter text entry

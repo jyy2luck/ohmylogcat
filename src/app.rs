@@ -52,6 +52,14 @@ pub enum ModalKind {
     FilterEdit { field: FilterField },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsField {
+    Adb,
+    Preset,
+    Custom,
+    Theme,
+}
+
 #[derive(Debug)]
 pub struct SettingsPanelState {
     pub adb_path: String,
@@ -59,7 +67,7 @@ pub struct SettingsPanelState {
     pub custom_capacity: String,
     pub theme: ThemePreference,
     pub status: Option<String>,
-    pub focus_field: usize, // 0 = adb, 1 = preset, 2 = custom, 3 = theme
+    focus_field: SettingsField,
 }
 
 impl SettingsPanelState {
@@ -71,8 +79,42 @@ impl SettingsPanelState {
             custom_capacity: settings.buffer_capacity.to_string(),
             theme: settings.theme,
             status: None,
-            focus_field: 0,
+            focus_field: SettingsField::Adb,
         }
+    }
+
+    fn visible_fields(preset: BufferPreset) -> &'static [SettingsField] {
+        static WITH_CUSTOM: [SettingsField; 4] = [
+            SettingsField::Adb,
+            SettingsField::Preset,
+            SettingsField::Custom,
+            SettingsField::Theme,
+        ];
+        static WITHOUT_CUSTOM: [SettingsField; 3] = [
+            SettingsField::Adb,
+            SettingsField::Preset,
+            SettingsField::Theme,
+        ];
+        if preset == BufferPreset::Custom {
+            &WITH_CUSTOM
+        } else {
+            &WITHOUT_CUSTOM
+        }
+    }
+
+    fn move_focus(&mut self, delta: isize) {
+        let fields = Self::visible_fields(self.preset);
+        if !fields.contains(&self.focus_field) {
+            self.focus_field = SettingsField::Preset;
+            return;
+        }
+        let idx = fields
+            .iter()
+            .position(|f| *f == self.focus_field)
+            .unwrap_or(0);
+        let len = fields.len() as isize;
+        let next = (idx as isize + delta).rem_euclid(len) as usize;
+        self.focus_field = fields[next];
     }
 
     pub fn capacity(&self) -> usize {
@@ -505,45 +547,27 @@ impl OhmylogcatApp {
     fn handle_settings_modal_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => self.close_modal(),
-            KeyCode::Tab => {
-                self.settings_panel.focus_field =
-                    (self.settings_panel.focus_field + 1) % 4;
-            }
-            KeyCode::BackTab => {
-                self.settings_panel.focus_field =
-                    (self.settings_panel.focus_field + 3) % 4;
-            }
             KeyCode::Enter => self.save_settings_panel(),
+            KeyCode::Up | KeyCode::Char('k') => self.settings_panel.move_focus(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.settings_panel.move_focus(1),
             KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l')
-                if self.settings_panel.focus_field == 1 =>
+                if self.settings_panel.focus_field == SettingsField::Preset =>
             {
                 let forward = matches!(key.code, KeyCode::Right | KeyCode::Char('l'));
                 self.cycle_preset(forward);
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l')
-                if self.settings_panel.focus_field == 3 =>
+                if self.settings_panel.focus_field == SettingsField::Theme =>
             {
                 let forward = matches!(key.code, KeyCode::Right | KeyCode::Char('l'));
                 self.cycle_theme(forward);
             }
-            KeyCode::Char('[') if self.settings_panel.focus_field == 1 => {
-                self.cycle_preset(false);
-            }
-            KeyCode::Char(']') if self.settings_panel.focus_field == 1 => {
-                self.cycle_preset(true);
-            }
-            KeyCode::Char('[') if self.settings_panel.focus_field == 3 => {
-                self.cycle_theme(false);
-            }
-            KeyCode::Char(']') if self.settings_panel.focus_field == 3 => {
-                self.cycle_theme(true);
-            }
             KeyCode::Backspace => {
                 match self.settings_panel.focus_field {
-                    0 => {
+                    SettingsField::Adb => {
                         self.settings_panel.adb_path.pop();
                     }
-                    2 => {
+                    SettingsField::Custom => {
                         self.settings_panel.custom_capacity.pop();
                     }
                     _ => {}
@@ -551,11 +575,14 @@ impl OhmylogcatApp {
             }
             KeyCode::Char(c)
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
-                    && !matches!(self.settings_panel.focus_field, 1 | 3) =>
+                    && !matches!(
+                        self.settings_panel.focus_field,
+                        SettingsField::Preset | SettingsField::Theme
+                    ) =>
             {
                 match self.settings_panel.focus_field {
-                    0 => self.settings_panel.adb_path.push(c),
-                    2 => {
+                    SettingsField::Adb => self.settings_panel.adb_path.push(c),
+                    SettingsField::Custom => {
                         if c.is_ascii_digit() {
                             self.settings_panel.custom_capacity.push(c);
                         }
@@ -1115,6 +1142,8 @@ impl OhmylogcatApp {
     }
 
     fn cycle_preset(&mut self, forward: bool) {
+        let was_custom_focus =
+            self.settings_panel.focus_field == SettingsField::Custom;
         let all = BufferPreset::ALL;
         let idx = all
             .iter()
@@ -1128,6 +1157,9 @@ impl OhmylogcatApp {
         self.settings_panel.preset = all[next];
         if let Some(cap) = self.settings_panel.preset.capacity() {
             self.settings_panel.custom_capacity = cap.to_string();
+        }
+        if was_custom_focus && self.settings_panel.preset != BufferPreset::Custom {
+            self.settings_panel.focus_field = SettingsField::Preset;
         }
     }
 
@@ -1639,50 +1671,38 @@ impl OhmylogcatApp {
                 frame.render_widget(Paragraph::new(lines).block(block), popup);
             }
             ModalKind::Settings => {
-                let adb_mark = if self.settings_panel.focus_field == 0 {
-                    ">"
-                } else {
-                    " "
-                };
-                let preset_mark = if self.settings_panel.focus_field == 1 {
-                    ">"
-                } else {
-                    " "
-                };
-                let custom_mark = if self.settings_panel.focus_field == 2 {
-                    ">"
-                } else {
-                    " "
-                };
-                let theme_mark = if self.settings_panel.focus_field == 3 {
-                    ">"
-                } else {
-                    " "
-                };
+                let focus = self.settings_panel.focus_field;
+                let mark = |field: SettingsField| if focus == field { ">" } else { " " };
                 let mut lines = vec![
-                    Line::from("Tab fields · [ ] cycle preset/theme · Enter save · Esc cancel"),
+                    Line::from(
+                        "↑/↓ move (j/k) · ←/→ adjust (h/l) · type text · Enter save · Esc cancel",
+                    ),
                     Line::from(""),
-                    Line::from(format!(
-                        "{} ADB: [{}]",
-                        adb_mark, self.settings_panel.adb_path
-                    )),
-                    Line::from(format!(
-                        "{} Preset: {}",
-                        preset_mark,
-                        self.settings_panel.preset.label()
-                    )),
                 ];
-                if self.settings_panel.preset == BufferPreset::Custom {
-                    lines.push(Line::from(format!(
-                        "{} Custom: [{}]",
-                        custom_mark, self.settings_panel.custom_capacity
-                    )));
+                for &field in SettingsPanelState::visible_fields(self.settings_panel.preset) {
+                    lines.push(match field {
+                        SettingsField::Adb => Line::from(format!(
+                            "{} ADB: [{}]",
+                            mark(field),
+                            self.settings_panel.adb_path
+                        )),
+                        SettingsField::Preset => Line::from(format!(
+                            "{} Preset: {}",
+                            mark(field),
+                            self.settings_panel.preset.label()
+                        )),
+                        SettingsField::Custom => Line::from(format!(
+                            "{} Custom: [{}]",
+                            mark(field),
+                            self.settings_panel.custom_capacity
+                        )),
+                        SettingsField::Theme => Line::from(format!(
+                            "{} Theme: {}",
+                            mark(field),
+                            self.settings_panel.theme.label()
+                        )),
+                    });
                 }
-                lines.push(Line::from(format!(
-                    "{} Theme: {}",
-                    theme_mark,
-                    self.settings_panel.theme.label()
-                )));
                 if let Some(ref s) = self.settings_panel.status {
                     lines.push(Line::from(""));
                     lines.push(Line::from(s.clone()));
