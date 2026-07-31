@@ -1289,6 +1289,7 @@ impl OhmylogcatApp {
     pub fn draw(&mut self, frame: &mut Frame) {
         self.hit_map = HitMap::default();
         let area = frame.area();
+        let content = shell_content_area(area);
 
         let find_h = if self.find.open { 1u16 } else { 0 };
         let chunks = Layout::default()
@@ -1303,7 +1304,7 @@ impl OhmylogcatApp {
                 Constraint::Length(1), // separator
                 Constraint::Length(1), // status
             ])
-            .split(area);
+            .split(content);
 
         self.draw_toolbar(frame, chunks[0]);
         self.draw_separator(frame, chunks[1]);
@@ -1794,6 +1795,36 @@ fn truncate_input(s: &str, max: usize) -> String {
         let t: String = s.chars().take(max.saturating_sub(1)).collect();
         format!("{t}…")
     }
+}
+
+fn shell_content_area(area: Rect) -> Rect {
+    let (pad_x, pad_y) = if area.width >= 60 && area.height >= 15 {
+        (1, 1)
+    } else {
+        (0, 0)
+    };
+
+    if pad_x == 0 && pad_y == 0 {
+        return area;
+    }
+
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(pad_y),
+            Constraint::Min(0),
+            Constraint::Length(pad_y),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(pad_x),
+            Constraint::Min(0),
+            Constraint::Length(pad_x),
+        ])
+        .split(vertical[1])[1]
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

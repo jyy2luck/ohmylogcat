@@ -43,23 +43,52 @@ The system SHALL quit the application when the user presses `q` or `Q` without C
 - **WHEN** a non-text modal is open (for example Devices or Export menu) and the user presses `q`
 - **THEN** nothing happens and the application does not quit
 
+### Requirement: Shell viewport inset
+
+The system SHALL render the main shell (toolbar, filter row, section dividers, log viewport, and status bar) inside a uniform inset from the terminal edges rather than flush against the terminal border. When the terminal is large enough, the inset SHALL be at least one column on the left and right and one row on the top and bottom. When the terminal is too small to preserve a usable log viewport, the system MAY reduce or disable the inset. Modal overlays SHALL continue to use the full terminal area for centering and sizing. Mouse hit regions and log viewport dimensions SHALL match the inset content area so text selection and click targets remain accurate.
+
+#### Scenario: Inset visible on launch
+
+- **WHEN** the TUI main shell is shown in a terminal with sufficient width and height
+- **THEN** the toolbar, filter row, log viewport, and status bar are rendered inset from all four terminal edges with visible empty gutter space around the shell
+
+#### Scenario: Inset disabled on very small terminal
+
+- **WHEN** the terminal width or height falls below the minimum threshold for a usable inset
+- **THEN** the main shell MAY render edge-to-edge without inset while remaining usable
+
+#### Scenario: Log selection respects inset log area
+
+- **WHEN** the user drags to select text in the log viewport
+- **THEN** selection mapping uses the inset log viewport bounds and does not treat gutter cells outside the inset as log content
+
+#### Scenario: Modals ignore shell inset
+
+- **WHEN** a modal overlay is open
+- **THEN** the modal is centered and sized relative to the full terminal area, not the inset shell content area
+
+#### Scenario: Mouse in gutter does not start log selection
+
+- **WHEN** the user clicks in the gutter outside the inset log viewport
+- **THEN** log text selection does not start and existing chrome click or clear-selection behavior applies as for clicks outside the log viewport
+
 ### Requirement: Main layout hosts core logcat surfaces
 
-The system SHALL present within the terminal: a top toolbar of primary actions, filter controls showing Tag and Message filter summaries plus Level control, a scrollable log viewport, and a status bar showing buffer usage. Horizontal dividers SHALL separate the toolbar, filter row, log viewport, and status bar.
+The system SHALL present within the terminal: a top toolbar of primary actions, filter controls showing Tag and Message filter summaries plus Level control, a scrollable log viewport, and a status bar showing buffer usage. These surfaces SHALL be laid out inside the shell viewport inset when inset is active. Horizontal dividers SHALL separate the toolbar, filter row, log viewport, and status bar.
 
 #### Scenario: Initial layout visible
 
 - **WHEN** the TUI is shown after launch
-- **THEN** toolbar, filter area (including Tag and Message summaries), log viewport, and status bar are all visible and usable, with dividers between each major zone
+- **THEN** toolbar, filter area (including Tag and Message summaries), log viewport, and status bar are all visible and usable inside the shell content area, with dividers between each major zone
 
 ### Requirement: Visual section dividers
 
-The system SHALL render full-width horizontal divider lines between the toolbar, filter row, log viewport, and status bar so the four main layout zones are visually distinct.
+The system SHALL render horizontal divider lines between the toolbar, filter row, log viewport, and status bar so the four main layout zones are visually distinct. Divider lines SHALL span the width of the shell content area (inset width when inset is active), not the full terminal width when inset is active.
 
 #### Scenario: Dividers visible on launch
 
-- **WHEN** the TUI main shell is shown after launch
-- **THEN** a horizontal divider appears between the toolbar and filter row, between the filter row and log viewport, and between the log viewport and status bar
+- **WHEN** the TUI main shell is shown after launch with shell inset active
+- **THEN** a horizontal divider appears between the toolbar and filter row, between the filter row and log viewport, and between the log viewport and status bar, each aligned with the inset content width
 
 #### Scenario: Dividers do not intercept input
 
@@ -201,14 +230,58 @@ The system SHALL maintain an explicit focus target among at least: log viewport,
 - **WHEN** a modal is open or the find bar is open and the user presses Esc
 - **THEN** the overlay closes or the find bar closes and focus returns to the log viewport according to the overlay type
 
+### Requirement: Settings modal keyboard navigation
+
+The Settings modal SHALL use vertical arrow keys to move focus among visible settings rows and horizontal arrow keys to adjust cycle-type fields. The modal SHALL display a help line at the top documenting move, adjust, text entry, save, and cancel bindings. Focus SHALL always rest on a visible row; the Custom capacity row SHALL be included in navigation only when the buffer preset is Custom.
+
+#### Scenario: Move focus with vertical keys
+
+- **WHEN** the Settings modal is open and the user presses Up, Down, `k`, or `j`
+- **THEN** the focus cursor moves to the previous or next visible settings row and the `>` marker follows the focused row
+
+#### Scenario: Adjust preset with horizontal keys
+
+- **WHEN** the Settings modal is open, buffer preset is focused, and the user presses Left, Right, `h`, or `l`
+- **THEN** the buffer preset cycles backward or forward through available presets
+
+#### Scenario: Adjust theme with horizontal keys
+
+- **WHEN** the Settings modal is open, theme is focused, and the user presses Left, Right, `h`, or `l`
+- **THEN** the theme preference cycles backward or forward
+
+#### Scenario: Text fields use direct typing
+
+- **WHEN** the Settings modal is open, ADB path or Custom capacity is focused, and the user types printable characters or presses Backspace
+- **THEN** the focused text field is edited append-only and Left/Right do not change the field value
+
+#### Scenario: Custom row hidden from navigation
+
+- **WHEN** the Settings modal is open and the buffer preset is not Custom
+- **THEN** Up/Down navigation skips the Custom capacity row and focus never rests on a row that is not rendered
+
+#### Scenario: Focus re-anchors when Custom row hides
+
+- **WHEN** the Settings modal is open, Custom capacity is focused, and the user cycles preset away from Custom
+- **THEN** focus moves to an adjacent visible row (preset or theme) and the Custom row is no longer focused
+
+#### Scenario: Help line documents controls
+
+- **WHEN** the Settings modal is rendered
+- **THEN** the first content line documents vertical move, horizontal adjust, text entry, Enter save, and Esc cancel
+
+#### Scenario: Save and cancel unchanged
+
+- **WHEN** the Settings modal is open and the user presses Enter or Esc
+- **THEN** settings are persisted and the modal closes, or the modal closes without saving, per existing Settings save behavior
+
 ### Requirement: Modal panels for settings and path prompts
 
-The system SHALL present Settings, export path entry, and Tag/Message filter editing as in-TUI modal panels rather than native OS GUI dialogs.
+The system SHALL present Settings, export path entry, and Tag/Message filter editing as in-TUI modal panels rather than native OS GUI dialogs. The Settings modal SHALL follow the Settings modal keyboard navigation requirement.
 
 #### Scenario: Open settings modal
 
 - **WHEN** the user opens Settings from the toolbar or shortcut
-- **THEN** a modal panel shows adb path and buffer configuration controls editable in the terminal
+- **THEN** a modal panel shows adb path and buffer configuration controls editable in the terminal with keyboard navigation help visible at the top
 
 #### Scenario: Open tag filter modal from filter row
 
