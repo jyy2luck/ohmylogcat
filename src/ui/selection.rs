@@ -1,6 +1,7 @@
 //! Mouse text selection in the log viewport.
 
 use crate::ui::display::WrapChunks;
+use crate::ui::Theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
@@ -210,14 +211,13 @@ fn mouse_to_log_pos_wrapped(
     None
 }
 
-const SELECTION_BG: Color = Color::Blue;
-
 /// Build styled spans for a text segment with selection and optional find highlights.
 pub fn line_spans(
     text: &str,
     log_row: usize,
     line_char_start: usize,
     base_color: Color,
+    theme: &Theme,
     selection: &TextSelection,
     find_q: &str,
     is_find_current: bool,
@@ -229,7 +229,7 @@ pub fn line_spans(
     if find_q.is_empty() && !selection.is_active() {
         return vec![Span::styled(
             text.to_string(),
-            base_style(base_color, is_find_current, false),
+            base_style(theme, base_color, is_find_current, false),
         )];
     }
 
@@ -259,7 +259,7 @@ pub fn line_spans(
             }
             spans.push(Span::styled(
                 matched,
-                find_style(is_find_current, any_selected),
+                find_style(theme, is_find_current, any_selected),
             ));
             i += q.len();
             continue;
@@ -281,7 +281,7 @@ pub fn line_spans(
         let run: String = chars[i..j].iter().collect();
         spans.push(Span::styled(
             run,
-            base_style(base_color, is_find_current && find_q.is_empty(), selected),
+            base_style(theme, base_color, is_find_current && find_q.is_empty(), selected),
         ));
         i = j;
     }
@@ -289,20 +289,20 @@ pub fn line_spans(
     if spans.is_empty() {
         spans.push(Span::styled(
             text.to_string(),
-            base_style(base_color, is_find_current, false),
+            base_style(theme, base_color, is_find_current, false),
         ));
     }
     spans
 }
 
-fn find_style(is_current: bool, selected: bool) -> Style {
+fn find_style(theme: &Theme, is_current: bool, selected: bool) -> Style {
     if selected {
         Style::default()
-            .fg(Color::White)
-            .bg(SELECTION_BG)
+            .fg(theme.selection_fg)
+            .bg(theme.selection_bg)
             .add_modifier(Modifier::BOLD)
     } else {
-        let mut style = Style::default().fg(Color::Black).bg(Color::Yellow);
+        let mut style = Style::default().fg(theme.find_fg).bg(theme.find_bg);
         if is_current {
             style = style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
         }
@@ -310,11 +310,11 @@ fn find_style(is_current: bool, selected: bool) -> Style {
     }
 }
 
-fn base_style(base: Color, is_find_current: bool, selected: bool) -> Style {
+fn base_style(theme: &Theme, base: Color, is_find_current: bool, selected: bool) -> Style {
     if selected {
         Style::default()
-            .fg(Color::White)
-            .bg(SELECTION_BG)
+            .fg(theme.selection_fg)
+            .bg(theme.selection_bg)
             .add_modifier(Modifier::BOLD)
     } else {
         let mut style = Style::default().fg(base);

@@ -1,3 +1,4 @@
+use crate::ui::ThemePreference;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -10,6 +11,8 @@ pub struct Settings {
     pub auto_scroll_to_end: bool,
     #[serde(default)]
     pub soft_wrap: bool,
+    #[serde(default)]
+    pub theme: ThemePreference,
 }
 
 fn default_true() -> bool {
@@ -23,6 +26,7 @@ impl Default for Settings {
             buffer_capacity: 200_000,
             auto_scroll_to_end: true,
             soft_wrap: false,
+            theme: ThemePreference::default(),
         }
     }
 }

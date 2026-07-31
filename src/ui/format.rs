@@ -1,5 +1,4 @@
-use crate::parser::{LogEntry, LogLevel};
-use ratatui::style::Color;
+use crate::parser::LogEntry;
 
 pub fn format_log_line(entry: &LogEntry) -> String {
     format!(
@@ -11,14 +10,4 @@ pub fn format_log_line(entry: &LogEntry) -> String {
         entry.tag,
         entry.message
     )
-}
-
-pub fn level_color(level: LogLevel) -> Color {
-    match level {
-        LogLevel::Verbose => Color::DarkGray,
-        LogLevel::Debug => Color::Cyan,
-        LogLevel::Info => Color::White,
-        LogLevel::Warn => Color::Yellow,
-        LogLevel::Error | LogLevel::Fatal => Color::Red,
-    }
 }

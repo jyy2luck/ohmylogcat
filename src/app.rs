@@ -6,14 +6,14 @@ use crate::parser::LogLevel;
 use crate::settings::{
     load_settings, save_settings, BufferPreset, BufferStats, Settings,
 };
-use crate::ui::{format_log_line, level_color, line_spans, mouse_to_log_pos, reset_pointer_shape, set_pointer_shape, visible_chars, wrap_line_count, FindState, LogPos, PointerShape, TextInput, TextSelection, ViewportMap, WrapChunks, TEXT_INPUT_CURSOR_STYLE};
+use crate::ui::{format_log_line, line_spans, mouse_to_log_pos, reset_pointer_shape, set_pointer_shape, visible_chars, wrap_line_count, FindState, LogPos, PointerShape, TextInput, TextSelection, Theme, ThemePreference, ViewportMap, WrapChunks, TEXT_INPUT_CURSOR_STYLE};
 use crossterm::cursor::SetCursorStyle;
 use crossterm::execute;
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
@@ -57,8 +57,9 @@ pub struct SettingsPanelState {
     pub adb_path: String,
     pub preset: BufferPreset,
     pub custom_capacity: String,
+    pub theme: ThemePreference,
     pub status: Option<String>,
-    pub focus_field: usize, // 0 = adb, 1 = preset, 2 = custom
+    pub focus_field: usize, // 0 = adb, 1 = preset, 2 = custom, 3 = theme
 }
 
 impl SettingsPanelState {
@@ -68,6 +69,7 @@ impl SettingsPanelState {
             adb_path: settings.adb_path.clone().unwrap_or_default(),
             preset,
             custom_capacity: settings.buffer_capacity.to_string(),
+            theme: settings.theme,
             status: None,
             focus_field: 0,
         }
@@ -111,6 +113,7 @@ pub struct OhmylogcatApp {
     event_rx: Receiver<EngineEvent>,
 
     settings: Settings,
+    theme: Theme,
     devices: Vec<Device>,
     selected_serial: Option<String>,
     device_cursor: usize,
@@ -154,6 +157,7 @@ impl OhmylogcatApp {
     pub fn new() -> Self {
         let rt = Runtime::new().expect("tokio runtime");
         let settings = load_settings();
+        let theme = Theme::resolve(settings.theme);
         let (engine, event_rx) = Engine::new(settings.buffer_capacity);
 
         let mut app = Self {
@@ -194,6 +198,7 @@ impl OhmylogcatApp {
             follow_dirty: true,
             should_quit: false,
             settings,
+            theme,
         };
         app.refresh_devices();
         app
@@ -502,11 +507,11 @@ impl OhmylogcatApp {
             KeyCode::Esc => self.close_modal(),
             KeyCode::Tab => {
                 self.settings_panel.focus_field =
-                    (self.settings_panel.focus_field + 1) % 3;
+                    (self.settings_panel.focus_field + 1) % 4;
             }
             KeyCode::BackTab => {
                 self.settings_panel.focus_field =
-                    (self.settings_panel.focus_field + 2) % 3;
+                    (self.settings_panel.focus_field + 3) % 4;
             }
             KeyCode::Enter => self.save_settings_panel(),
             KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l')
@@ -515,11 +520,23 @@ impl OhmylogcatApp {
                 let forward = matches!(key.code, KeyCode::Right | KeyCode::Char('l'));
                 self.cycle_preset(forward);
             }
+            KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l')
+                if self.settings_panel.focus_field == 3 =>
+            {
+                let forward = matches!(key.code, KeyCode::Right | KeyCode::Char('l'));
+                self.cycle_theme(forward);
+            }
             KeyCode::Char('[') if self.settings_panel.focus_field == 1 => {
                 self.cycle_preset(false);
             }
             KeyCode::Char(']') if self.settings_panel.focus_field == 1 => {
                 self.cycle_preset(true);
+            }
+            KeyCode::Char('[') if self.settings_panel.focus_field == 3 => {
+                self.cycle_theme(false);
+            }
+            KeyCode::Char(']') if self.settings_panel.focus_field == 3 => {
+                self.cycle_theme(true);
             }
             KeyCode::Backspace => {
                 match self.settings_panel.focus_field {
@@ -534,7 +551,7 @@ impl OhmylogcatApp {
             }
             KeyCode::Char(c)
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
-                    && self.settings_panel.focus_field != 1 =>
+                    && !matches!(self.settings_panel.focus_field, 1 | 3) =>
             {
                 match self.settings_panel.focus_field {
                     0 => self.settings_panel.adb_path.push(c),
@@ -1114,6 +1131,10 @@ impl OhmylogcatApp {
         }
     }
 
+    fn cycle_theme(&mut self, forward: bool) {
+        self.settings_panel.theme = self.settings_panel.theme.cycle(forward);
+    }
+
     fn save_settings_panel(&mut self) {
         let settings = Settings {
             adb_path: if self.settings_panel.adb_path.trim().is_empty() {
@@ -1124,11 +1145,14 @@ impl OhmylogcatApp {
             buffer_capacity: self.settings_panel.capacity(),
             auto_scroll_to_end: self.auto_scroll,
             soft_wrap: self.soft_wrap,
+            theme: self.settings_panel.theme,
         };
         match save_settings(&settings) {
             Ok(()) => {
                 self.settings.adb_path = settings.adb_path.clone();
                 self.settings.buffer_capacity = settings.buffer_capacity;
+                self.settings.theme = settings.theme;
+                self.theme = Theme::resolve(settings.theme);
                 self.engine.set_capacity(settings.buffer_capacity);
                 self.status_message = Some("Settings saved".into());
                 self.close_modal();
@@ -1304,14 +1328,18 @@ impl OhmylogcatApp {
             self.hit_map.toolbar.push((rect, *hit));
             spans.push(Span::styled(
                 label.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(self.theme.shell_fg)
+                    .add_modifier(Modifier::BOLD),
             ));
             x = x.saturating_add(width);
         }
         spans.push(Span::raw(" │ "));
         spans.push(Span::styled(
             "[q]Quit",
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(self.theme.shell_fg)
+                .add_modifier(Modifier::BOLD),
         ));
 
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -1320,7 +1348,7 @@ impl OhmylogcatApp {
     fn draw_separator(&self, frame: &mut Frame, area: Rect) {
         let line = "─".repeat(area.width as usize);
         frame.render_widget(
-            Paragraph::new(line).style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new(line).style(Style::default().fg(self.theme.shell_divider)),
             area,
         );
     }
@@ -1331,9 +1359,11 @@ impl OhmylogcatApp {
             .map(|l| l.to_display())
             .unwrap_or("Verbose");
 
-        let summary_style = Style::default();
-        let shortcut_style = Style::default().add_modifier(Modifier::BOLD);
-        let level_style = field_style(self.focus == Focus::Level);
+        let summary_style = Style::default().fg(self.theme.shell_fg);
+        let shortcut_style = Style::default()
+            .fg(self.theme.shell_fg)
+            .add_modifier(Modifier::BOLD);
+        let level_style = field_style(self.focus == Focus::Level, &self.theme);
 
         let tag_value = truncate_input(&self.filter_tag.text, 16);
         let msg_value = truncate_input(&self.filter_message.text, 24);
@@ -1379,7 +1409,7 @@ impl OhmylogcatApp {
     }
 
     fn draw_find(&mut self, frame: &mut Frame, area: Rect) {
-        let style = field_style(self.focus == Focus::Find);
+        let style = field_style(self.focus == Focus::Find, &self.theme);
         let counter = self.find.counter_text();
         let query = &self.find.input.text;
         let prefix = "Find:[";
@@ -1433,7 +1463,7 @@ impl OhmylogcatApp {
         if row_count == 0 {
             items.push(ListItem::new(Span::styled(
                 "No logs — press [d] to select a device",
-                Style::default().fg(ratatui::style::Color::DarkGray),
+                Style::default().fg(self.theme.shell_hint),
             )));
             frame.render_widget(List::new(items), area);
             return;
@@ -1456,7 +1486,7 @@ impl OhmylogcatApp {
                 }
                 let row_idx = self.scroll_offset + i;
                 let line_str = format_log_line(entry);
-                let base_color = level_color(entry.level);
+                let base_color = self.theme.level_color(entry.level);
                 let is_current = current_row == Some(row_idx);
 
                 // Jump directly to the first visible wrap chunk instead of
@@ -1475,6 +1505,7 @@ impl OhmylogcatApp {
                         row_idx,
                         line_char_start,
                         base_color,
+                        &self.theme,
                         &self.selection,
                         &find_q,
                         is_current && abs_ci == 0,
@@ -1491,13 +1522,14 @@ impl OhmylogcatApp {
                 let row_idx = start + i;
                 let line_str = format_log_line(entry);
                 let visible = visible_chars(&line_str, self.col_offset, self.viewport_width);
-                let base_color = level_color(entry.level);
+                let base_color = self.theme.level_color(entry.level);
                 let is_current = current_row == Some(row_idx);
                 let spans = line_spans(
                     &visible,
                     row_idx,
                     self.col_offset,
                     base_color,
+                    &self.theme,
                     &self.selection,
                     &find_q,
                     is_current,
@@ -1538,7 +1570,7 @@ impl OhmylogcatApp {
             err
         );
         frame.render_widget(
-            Paragraph::new(text).style(Style::default().fg(ratatui::style::Color::Gray)),
+            Paragraph::new(text).style(Style::default().fg(self.theme.shell_muted)),
             area,
         );
     }
@@ -1622,8 +1654,13 @@ impl OhmylogcatApp {
                 } else {
                     " "
                 };
+                let theme_mark = if self.settings_panel.focus_field == 3 {
+                    ">"
+                } else {
+                    " "
+                };
                 let mut lines = vec![
-                    Line::from("Tab fields · [ ] cycle preset · Enter save · Esc cancel"),
+                    Line::from("Tab fields · [ ] cycle preset/theme · Enter save · Esc cancel"),
                     Line::from(""),
                     Line::from(format!(
                         "{} ADB: [{}]",
@@ -1641,6 +1678,11 @@ impl OhmylogcatApp {
                         custom_mark, self.settings_panel.custom_capacity
                     )));
                 }
+                lines.push(Line::from(format!(
+                    "{} Theme: {}",
+                    theme_mark,
+                    self.settings_panel.theme.label()
+                )));
                 if let Some(ref s) = self.settings_panel.status {
                     lines.push(Line::from(""));
                     lines.push(Line::from(s.clone()));
@@ -1714,14 +1756,14 @@ fn contains(rect: Rect, col: u16, row: u16) -> bool {
         && row < rect.y.saturating_add(rect.height)
 }
 
-fn field_style(focused: bool) -> Style {
+fn field_style(focused: bool, theme: &Theme) -> Style {
     if focused {
         Style::default()
-            .fg(ratatui::style::Color::Black)
-            .bg(ratatui::style::Color::Yellow)
+            .fg(theme.focus_fg)
+            .bg(theme.focus_bg)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default()
+        Style::default().fg(theme.shell_fg)
     }
 }
 
