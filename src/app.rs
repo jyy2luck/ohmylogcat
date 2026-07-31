@@ -63,6 +63,8 @@ enum SettingsField {
 #[derive(Debug)]
 pub struct SettingsPanelState {
     pub adb_path: String,
+    /// Resolved auto path (PATH / platform defaults); shown as read-only hint when override empty.
+    auto_adb: Option<String>,
     pub preset: BufferPreset,
     pub custom_capacity: String,
     pub theme: ThemePreference,
@@ -75,6 +77,8 @@ impl SettingsPanelState {
         let preset = BufferPreset::from_capacity(settings.buffer_capacity);
         Self {
             adb_path: settings.adb_path.clone().unwrap_or_default(),
+            // ponytail: resolve once on open; skip per-frame where/which
+            auto_adb: adb::resolve_adb_path(None).ok(),
             preset,
             custom_capacity: settings.buffer_capacity.to_string(),
             theme: settings.theme,
@@ -1718,28 +1722,37 @@ impl OhmylogcatApp {
                     Line::from(""),
                 ];
                 for &field in SettingsPanelState::visible_fields(self.settings_panel.preset) {
-                    lines.push(match field {
-                        SettingsField::Adb => Line::from(format!(
-                            "{} ADB: [{}]",
-                            mark(field),
-                            self.settings_panel.adb_path
-                        )),
-                        SettingsField::Preset => Line::from(format!(
+                    match field {
+                        SettingsField::Adb => {
+                            lines.push(Line::from(format!(
+                                "{} ADB: [{}]",
+                                mark(field),
+                                self.settings_panel.adb_path
+                            )));
+                            if self.settings_panel.adb_path.trim().is_empty() {
+                                let hint = match &self.settings_panel.auto_adb {
+                                    Some(path) => format!("  (using: {path})"),
+                                    None => "  (adb not found)".into(),
+                                };
+                                lines.push(Line::from(hint));
+                            }
+                        }
+                        SettingsField::Preset => lines.push(Line::from(format!(
                             "{} Preset: {}",
                             mark(field),
                             self.settings_panel.preset.label()
-                        )),
-                        SettingsField::Custom => Line::from(format!(
+                        ))),
+                        SettingsField::Custom => lines.push(Line::from(format!(
                             "{} Custom: [{}]",
                             mark(field),
                             self.settings_panel.custom_capacity
-                        )),
-                        SettingsField::Theme => Line::from(format!(
+                        ))),
+                        SettingsField::Theme => lines.push(Line::from(format!(
                             "{} Theme: {}",
                             mark(field),
                             self.settings_panel.theme.label()
-                        )),
-                    });
+                        ))),
+                    }
                 }
                 if let Some(ref s) = self.settings_panel.status {
                     lines.push(Line::from(""));
