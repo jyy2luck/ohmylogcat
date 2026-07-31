@@ -1,10 +1,11 @@
 use crate::engine::Engine;
 use crate::ui::format_log_line;
+use crate::ui::TextInput;
 
 #[derive(Debug, Default)]
 pub struct FindState {
     pub open: bool,
-    pub query: String,
+    pub input: TextInput,
     pub matches: Vec<usize>,
     pub current: usize,
     pub scroll_to_match: Option<usize>,
@@ -13,23 +14,24 @@ pub struct FindState {
 impl FindState {
     pub fn open_bar(&mut self) {
         self.open = true;
+        self.input.set_cursor_end();
     }
 
     pub fn close(&mut self) {
         self.open = false;
-        self.query.clear();
+        self.input = TextInput::default();
         self.matches.clear();
         self.current = 0;
         self.scroll_to_match = None;
     }
 
     pub fn is_active_with_matches(&self) -> bool {
-        self.open && !self.query.trim().is_empty() && !self.matches.is_empty()
+        self.open && !self.input.text.trim().is_empty() && !self.matches.is_empty()
     }
 
     pub fn recompute(&mut self, engine: &Engine) {
         self.matches.clear();
-        let q = self.query.trim().to_lowercase();
+        let q = self.input.text.trim().to_lowercase();
         if q.is_empty() {
             self.current = 0;
             return;
@@ -50,7 +52,7 @@ impl FindState {
     }
 
     pub fn append_search(&mut self, engine: &Engine, appended: usize) {
-        let q = self.query.trim().to_lowercase();
+        let q = self.input.text.trim().to_lowercase();
         if q.is_empty() || appended == 0 {
             return;
         }
@@ -109,7 +111,7 @@ impl FindState {
     }
 
     pub fn counter_text(&self) -> String {
-        if self.query.trim().is_empty() {
+        if self.input.text.trim().is_empty() {
             String::new()
         } else if self.matches.is_empty() {
             "0 matches".into()

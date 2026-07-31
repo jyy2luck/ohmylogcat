@@ -1,5 +1,6 @@
 //! Mouse text selection in the log viewport.
 
+use crate::ui::display::WrapChunks;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
@@ -182,8 +183,7 @@ fn mouse_to_log_pos_wrapped(
 
     while idx < row_count {
         let line = line_at(idx)?;
-        let chunks = wrap_chunks(&line, width);
-        for (ci, chunk) in chunks.iter().enumerate() {
+        for (ci, chunk) in WrapChunks::new(&line, width).enumerate() {
             if skip > 0 {
                 skip -= 1;
                 continue;
@@ -226,8 +226,19 @@ pub fn line_spans(
         return vec![Span::raw(String::new())];
     }
 
+    if find_q.is_empty() && !selection.is_active() {
+        return vec![Span::styled(
+            text.to_string(),
+            base_style(base_color, is_find_current, false),
+        )];
+    }
+
     let chars: Vec<char> = text.chars().collect();
-    let lower: Vec<char> = text.to_lowercase().chars().collect();
+    let lower: Vec<char> = if find_q.is_empty() {
+        Vec::new()
+    } else {
+        text.to_lowercase().chars().collect()
+    };
     let q: Vec<char> = find_q.chars().collect();
 
     let mut spans = Vec::new();
@@ -319,18 +330,6 @@ fn contains(rect: Rect, col: u16, row: u16) -> bool {
         && col < rect.x.saturating_add(rect.width)
         && row >= rect.y
         && row < rect.y.saturating_add(rect.height)
-}
-
-fn wrap_chunks(s: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    let chars: Vec<char> = s.chars().collect();
-    if chars.is_empty() {
-        return vec![String::new()];
-    }
-    chars
-        .chunks(width)
-        .map(|chunk| chunk.iter().collect())
-        .collect()
 }
 
 #[cfg(test)]

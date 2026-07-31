@@ -6,7 +6,9 @@ use crate::parser::LogLevel;
 use crate::settings::{
     load_settings, save_settings, BufferPreset, BufferStats, Settings,
 };
-use crate::ui::{format_log_line, level_color, line_spans, mouse_to_log_pos, reset_pointer_shape, set_pointer_shape, FindState, LogPos, PointerShape, TextSelection, ViewportMap};
+use crate::ui::{format_log_line, level_color, line_spans, mouse_to_log_pos, reset_pointer_shape, set_pointer_shape, visible_chars, wrap_line_count, FindState, LogPos, PointerShape, TextInput, TextSelection, ViewportMap, WrapChunks, TEXT_INPUT_CURSOR_STYLE};
+use crossterm::cursor::SetCursorStyle;
+use crossterm::execute;
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -87,6 +89,8 @@ struct HitMap {
     filter_tag: Option<Rect>,
     filter_message: Option<Rect>,
     filter_level: Option<Rect>,
+    filter_modal_input: Option<Rect>,
+    find_input: Option<Rect>,
     log_viewport: Option<Rect>,
 }
 
@@ -111,8 +115,8 @@ pub struct OhmylogcatApp {
     selected_serial: Option<String>,
     device_cursor: usize,
 
-    filter_tag: String,
-    filter_message: String,
+    filter_tag: TextInput,
+    filter_message: TextInput,
     filter_level: Option<LogLevel>,
 
     stats: BufferStats,
@@ -141,6 +145,8 @@ pub struct OhmylogcatApp {
     selection: TextSelection,
     last_mouse: Option<(u16, u16)>,
     last_pointer: Option<PointerShape>,
+    last_text_input_focused: Option<bool>,
+    follow_dirty: bool,
     should_quit: bool,
 }
 
@@ -157,8 +163,8 @@ impl OhmylogcatApp {
             devices: Vec::new(),
             selected_serial: None,
             device_cursor: 0,
-            filter_tag: String::new(),
-            filter_message: String::new(),
+            filter_tag: TextInput::new(),
+            filter_message: TextInput::new(),
             filter_level: None,
             stats: BufferStats {
                 capacity: settings.buffer_capacity,
@@ -184,6 +190,8 @@ impl OhmylogcatApp {
             selection: TextSelection::default(),
             last_mouse: None,
             last_pointer: None,
+            last_text_input_focused: None,
+            follow_dirty: true,
             should_quit: false,
             settings,
         };
@@ -219,12 +227,14 @@ impl OhmylogcatApp {
         }
 
         self.clamp_scroll();
-        if self.auto_scroll && !self.find.is_active_with_matches() {
-            self.scroll_to_bottom();
-        }
+        // Follow scroll is applied in `draw_logs` after viewport size is known.
+        // Doing it here used the previous frame's (or default) height/width and
+        // left Wrap mode stuck on the start of a long line.
         if let Some(row) = self.find.scroll_to_match.take() {
             self.ensure_row_visible(row);
         }
+
+        self.sync_terminal_cursor_style();
     }
 
     pub fn handle_event(&mut self, event: Event) -> io::Result<()> {
@@ -233,7 +243,9 @@ impl OhmylogcatApp {
                 self.handle_key(key);
             }
             Event::Mouse(mouse) => self.handle_mouse(mouse),
-            Event::Resize(_, _) => {}
+            Event::Resize(_, _) => {
+                self.follow_dirty = true;
+            }
             _ => {}
         }
         Ok(())
@@ -366,18 +378,11 @@ impl OhmylogcatApp {
                     self.find.next();
                 }
             }
-            KeyCode::Backspace => {
-                self.find.query.pop();
-                self.find.recompute(&self.engine);
+            _ => {
+                if self.find.input.handle_key(key) {
+                    self.find.recompute(&self.engine);
+                }
             }
-            KeyCode::Char(c)
-                if !key.modifiers.contains(KeyModifiers::CONTROL)
-                    && !key.modifiers.contains(KeyModifiers::SUPER) =>
-            {
-                self.find.query.push(c);
-                self.find.recompute(&self.engine);
-            }
-            _ => {}
         }
     }
 
@@ -397,28 +402,15 @@ impl OhmylogcatApp {
     fn handle_filter_edit_modal_key(&mut self, key: KeyEvent, field: FilterField) {
         match key.code {
             KeyCode::Esc => self.close_modal(),
-            KeyCode::Backspace => {
-                match field {
-                    FilterField::Tag => {
-                        self.filter_tag.pop();
-                    }
-                    FilterField::Message => {
-                        self.filter_message.pop();
-                    }
+            _ => {
+                let input = match field {
+                    FilterField::Tag => &mut self.filter_tag,
+                    FilterField::Message => &mut self.filter_message,
+                };
+                if input.handle_key(key) {
+                    self.mark_filter_dirty();
                 }
-                self.mark_filter_dirty();
             }
-            KeyCode::Char(c)
-                if !key.modifiers.contains(KeyModifiers::CONTROL)
-                    && !key.modifiers.contains(KeyModifiers::SUPER) =>
-            {
-                match field {
-                    FilterField::Tag => self.filter_tag.push(c),
-                    FilterField::Message => self.filter_message.push(c),
-                }
-                self.mark_filter_dirty();
-            }
-            _ => {}
         }
     }
 
@@ -568,6 +560,28 @@ impl OhmylogcatApp {
             MouseEventKind::ScrollUp => self.scroll_by(-3),
             MouseEventKind::ScrollDown => self.scroll_by(3),
             MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(r) = self.hit_map.filter_modal_input {
+                    if contains(r, col, row) {
+                        if let Some(ModalKind::FilterEdit { field }) = self.modal {
+                            let input = match field {
+                                FilterField::Tag => &mut self.filter_tag,
+                                FilterField::Message => &mut self.filter_message,
+                            };
+                            input.cursor =
+                                TextInput::cursor_from_click(col, r.x, &input.text);
+                            self.focus = Focus::Modal;
+                            return;
+                        }
+                    }
+                }
+                if let Some(r) = self.hit_map.find_input {
+                    if contains(r, col, row) {
+                        self.find.input.cursor =
+                            TextInput::cursor_from_click(col, r.x, &self.find.input.text);
+                        self.focus = Focus::Find;
+                        return;
+                    }
+                }
                 if self.try_start_log_selection(col, row) {
                     return;
                 }
@@ -695,7 +709,17 @@ impl OhmylogcatApp {
         let Some((col, row)) = self.last_mouse else {
             return;
         };
-        let shape = if self.modal.is_some() {
+        let shape = if self
+            .hit_map
+            .filter_modal_input
+            .is_some_and(|r| contains(r, col, row))
+            || self
+                .hit_map
+                .find_input
+                .is_some_and(|r| contains(r, col, row))
+        {
+            PointerShape::Text
+        } else if self.modal.is_some() {
             PointerShape::Default
         } else if self
             .hit_map
@@ -711,6 +735,28 @@ impl OhmylogcatApp {
         }
         if set_pointer_shape(shape).is_ok() {
             self.last_pointer = Some(shape);
+        }
+    }
+
+    fn sync_terminal_cursor_style(&mut self) {
+        let focused = self.text_input_focused();
+        if self.last_text_input_focused == Some(focused) {
+            return;
+        }
+        self.last_text_input_focused = Some(focused);
+        let style = if focused {
+            TEXT_INPUT_CURSOR_STYLE
+        } else {
+            SetCursorStyle::DefaultUserShape
+        };
+        let _ = execute!(io::stdout(), style);
+    }
+
+    fn text_input_focused(&self) -> bool {
+        match self.focus {
+            Focus::Find if self.find.open => true,
+            Focus::Modal => matches!(self.modal, Some(ModalKind::FilterEdit { .. })),
+            _ => false,
         }
     }
 
@@ -756,6 +802,10 @@ impl OhmylogcatApp {
     }
 
     fn open_filter_edit(&mut self, field: FilterField) {
+        match field {
+            FilterField::Tag => self.filter_tag.set_cursor_end(),
+            FilterField::Message => self.filter_message.set_cursor_end(),
+        }
         self.modal = Some(ModalKind::FilterEdit { field });
         self.focus = Focus::Modal;
     }
@@ -786,7 +836,7 @@ impl OhmylogcatApp {
     fn toggle_follow(&mut self) {
         self.auto_scroll = !self.auto_scroll;
         if self.auto_scroll {
-            self.scroll_to_bottom();
+            self.follow_dirty = true;
         }
         self.persist_display_prefs();
     }
@@ -899,18 +949,16 @@ impl OhmylogcatApp {
             return true;
         }
         let width = self.viewport_width.max(1);
-        let mut lines = 0usize;
-        let mut idx = self.scroll_offset;
-        let mut skip = self.wrap_skip;
-        while idx < n && lines < self.viewport_height {
-            let h = self.entry_wrap_height(idx, width);
-            lines += h.saturating_sub(skip);
-            skip = 0;
-            idx += 1;
+        let height = self.viewport_height.max(1);
+        let mut idx = n - 1;
+        let mut lines_after = self.entry_wrap_height(idx, width);
+        while lines_after < height && idx > 0 {
+            idx -= 1;
+            lines_after += self.entry_wrap_height(idx, width);
         }
-        // At bottom when we've consumed all entries and still have room,
-        // or exactly filled through the last entry.
-        idx >= n
+        let want_offset = idx;
+        let want_skip = lines_after.saturating_sub(height);
+        self.scroll_offset == want_offset && self.wrap_skip == want_skip
     }
 
     fn scroll_to_bottom(&mut self) {
@@ -927,14 +975,22 @@ impl OhmylogcatApp {
         }
 
         let width = self.viewport_width.max(1);
-        let mut lines = 0usize;
-        let mut start = n;
-        while start > 0 && lines < self.viewport_height {
-            start -= 1;
-            lines += self.entry_wrap_height(start, width);
+        let height = self.viewport_height.max(1);
+        let mut idx = n - 1;
+        let mut lines_after = self.entry_wrap_height(idx, width).max(1);
+        while lines_after < height && idx > 0 {
+            idx -= 1;
+            lines_after += self.entry_wrap_height(idx, width).max(1);
         }
-        self.scroll_offset = start;
-        self.wrap_skip = lines.saturating_sub(self.viewport_height);
+        self.scroll_offset = idx;
+        self.wrap_skip = lines_after.saturating_sub(height);
+    }
+
+    fn apply_follow_scroll_if_needed(&mut self) {
+        if self.auto_scroll && !self.find.is_active_with_matches() && self.follow_dirty {
+            self.scroll_to_bottom();
+            self.follow_dirty = false;
+        }
     }
 
     fn max_scroll(&self) -> usize {
@@ -1088,19 +1144,20 @@ impl OhmylogcatApp {
     }
 
     fn apply_filter(&mut self) {
-        let tag = if self.filter_tag.is_empty() {
+        let tag = if self.filter_tag.text.is_empty() {
             None
         } else {
-            Some(self.filter_tag.clone())
+            Some(self.filter_tag.text.clone())
         };
-        let message = if self.filter_message.is_empty() {
+        let message = if self.filter_message.text.is_empty() {
             None
         } else {
-            Some(self.filter_message.clone())
+            Some(self.filter_message.text.clone())
         };
         self.engine
             .set_filter(tag, message, self.filter_level);
         self.selection.clear();
+        self.follow_dirty = true;
         if self.find.open {
             self.find.recompute(&self.engine);
         }
@@ -1141,11 +1198,13 @@ impl OhmylogcatApp {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
                 EngineEvent::RowsAppended(n) => {
+                    self.follow_dirty = true;
                     if self.find.open {
                         self.find.append_search(&self.engine, n);
                     }
                 }
                 EngineEvent::DroppedFront(n) => {
+                    self.follow_dirty = true;
                     if self.find.open {
                         self.find.on_dropped_front(n);
                     }
@@ -1159,6 +1218,7 @@ impl OhmylogcatApp {
                     self.last_error = Some(err);
                 }
                 EngineEvent::Cleared => {
+                    self.follow_dirty = true;
                     if self.find.open {
                         self.find.recompute(&self.engine);
                     }
@@ -1275,8 +1335,8 @@ impl OhmylogcatApp {
         let shortcut_style = Style::default().add_modifier(Modifier::BOLD);
         let level_style = field_style(self.focus == Focus::Level);
 
-        let tag_value = truncate_input(&self.filter_tag, 16);
-        let msg_value = truncate_input(&self.filter_message, 24);
+        let tag_value = truncate_input(&self.filter_tag.text, 16);
+        let msg_value = truncate_input(&self.filter_message.text, 24);
         let tag_label = format!("[t]Tag[{tag_value}] ");
         let msg_label = format!("[m]Message[{msg_value}] ");
         let level_label = format!("[l]Level[{level_text}]");
@@ -1321,21 +1381,44 @@ impl OhmylogcatApp {
     fn draw_find(&mut self, frame: &mut Frame, area: Rect) {
         let style = field_style(self.focus == Focus::Find);
         let counter = self.find.counter_text();
-        let text = format!(
-            "Find:[{}] {}  (Enter next · Shift+Enter prev · Esc close)",
-            self.find.query, counter
-        );
+        let query = &self.find.input.text;
+        let prefix = "Find:[";
+        let suffix = format!("] {counter}  (Enter next · Shift+Enter prev · Esc close)");
+        let value_width = query.chars().count().max(1) as u16;
+        let prefix_width = prefix.chars().count() as u16;
+        let value_start_col = area.x.saturating_add(prefix_width);
+        self.hit_map.find_input = Some(Rect {
+            x: value_start_col,
+            y: area.y,
+            width: value_width,
+            height: 1,
+        });
+
+        if self.focus == Focus::Find {
+            let cursor_x = value_start_col.saturating_add(self.find.input.display_width_before_cursor());
+            frame.set_cursor_position((cursor_x, area.y));
+        }
+
+        let text = format!("{prefix}{query}{suffix}");
         frame.render_widget(Paragraph::new(Span::styled(text, style)), area);
     }
 
     fn draw_logs(&mut self, frame: &mut Frame, area: Rect) {
         self.hit_map.log_viewport = Some(area);
+        let prev_h = self.viewport_height;
+        let prev_w = self.viewport_width;
         self.viewport_height = area.height as usize;
         self.viewport_width = area.width as usize;
+        // Viewport size is only known here; re-follow when it changes so Wrap
+        // mode lands on the true end of a long line (not the default 10-row math).
+        if self.viewport_height != prev_h || self.viewport_width != prev_w {
+            self.follow_dirty = true;
+        }
+        self.apply_follow_scroll_if_needed();
 
         let row_count = self.engine.filtered_len();
         let find_q = if self.find.open {
-            self.find.query.trim().to_lowercase()
+            self.find.input.text.trim().to_lowercase()
         } else {
             String::new()
         };
@@ -1373,19 +1456,20 @@ impl OhmylogcatApp {
                 }
                 let row_idx = self.scroll_offset + i;
                 let line_str = format_log_line(entry);
-                let chunks = wrap_chunks(&line_str, width);
                 let base_color = level_color(entry.level);
                 let is_current = current_row == Some(row_idx);
 
-                for (ci, chunk) in chunks.into_iter().enumerate() {
-                    if skip > 0 {
-                        skip -= 1;
-                        continue;
-                    }
+                // Jump directly to the first visible wrap chunk instead of
+                // iterating and discarding skipped chunks one-by-one.
+                let start_chunk = skip;
+                let remainder = visible_chars(&line_str, start_chunk * width, usize::MAX);
+                skip = 0;
+                for (ci, chunk) in WrapChunks::new(&remainder, width).enumerate() {
                     if items.len() >= height {
                         break;
                     }
-                    let line_char_start = ci * width;
+                    let abs_ci = start_chunk + ci;
+                    let line_char_start = abs_ci * width;
                     let spans = line_spans(
                         &chunk,
                         row_idx,
@@ -1393,7 +1477,7 @@ impl OhmylogcatApp {
                         base_color,
                         &self.selection,
                         &find_q,
-                        is_current && ci == 0,
+                        is_current && abs_ci == 0,
                     );
                     items.push(ListItem::new(Line::from(spans)));
                 }
@@ -1406,8 +1490,7 @@ impl OhmylogcatApp {
             for (i, entry) in entries.iter().enumerate() {
                 let row_idx = start + i;
                 let line_str = format_log_line(entry);
-                let sliced = skip_chars(&line_str, self.col_offset);
-                let visible = truncate_chars(&sliced, self.viewport_width);
+                let visible = visible_chars(&line_str, self.col_offset, self.viewport_width);
                 let base_color = level_color(entry.level);
                 let is_current = current_row == Some(row_idx);
                 let spans = line_spans(
@@ -1441,9 +1524,11 @@ impl OhmylogcatApp {
             .or(self.status_message.as_deref())
             .unwrap_or("");
         let wrap_hint = if self.soft_wrap { "wrap:on" } else { "wrap:off" };
+        let filtered = self.engine.filtered_len();
         let text = format!(
-            "{}  {}/{}  {:.0} lines/s  ~{:.1} MB  {}  {}  {}",
+            "{}  {}/{}/{}  {:.0} lines/s  ~{:.1} MB  {}  {}  {}",
             live_txt,
+            filtered,
             self.stats.count,
             self.stats.capacity,
             self.stats.lines_per_sec,
@@ -1566,24 +1651,43 @@ impl OhmylogcatApp {
                 frame.render_widget(Paragraph::new(lines).block(block), popup);
             }
             ModalKind::FilterEdit { field } => {
-                let (title, label, value) = match field {
+                let (title, label, input) = match field {
                     FilterField::Tag => (
                         " Tag filter ",
                         "Tag contains:",
-                        self.filter_tag.as_str(),
+                        &self.filter_tag,
                     ),
                     FilterField::Message => (
                         " Message filter ",
                         "Message contains:",
-                        self.filter_message.as_str(),
+                        &self.filter_message,
                     ),
                 };
+                let value = &input.text;
+                let prefix = format!("{label} [");
+                let prefix_width = prefix.chars().count() as u16;
+                let block = Block::default().title(title).borders(Borders::ALL);
+                let inner = block.inner(popup);
+                let value_start_col = inner.x.saturating_add(prefix_width);
+                let value_width = value.chars().count().max(1) as u16;
+                self.hit_map.filter_modal_input = Some(Rect {
+                    x: value_start_col,
+                    y: inner.y,
+                    width: value_width,
+                    height: 1,
+                });
+
+                if self.focus == Focus::Modal {
+                    let cursor_x =
+                        value_start_col.saturating_add(input.display_width_before_cursor());
+                    frame.set_cursor_position((cursor_x, inner.y));
+                }
+
                 let lines = vec![
                     Line::from(format!("{label} [{value}]")),
                     Line::from(""),
                     Line::from("Live filter · Esc done"),
                 ];
-                let block = Block::default().title(title).borders(Borders::ALL);
                 frame.render_widget(Paragraph::new(lines).block(block), popup);
             }
         }
@@ -1628,43 +1732,6 @@ fn truncate_input(s: &str, max: usize) -> String {
         let t: String = s.chars().take(max.saturating_sub(1)).collect();
         format!("{t}…")
     }
-}
-
-fn skip_chars(s: &str, n: usize) -> String {
-    s.chars().skip(n).collect()
-}
-
-fn truncate_chars(s: &str, max: usize) -> String {
-    let count = s.chars().count();
-    if count <= max {
-        s.to_string()
-    } else {
-        s.chars().take(max).collect()
-    }
-}
-
-/// Number of terminal rows needed to show `s` at `width` columns.
-fn wrap_line_count(s: &str, width: usize) -> usize {
-    let width = width.max(1);
-    let chars = s.chars().count();
-    if chars == 0 {
-        1
-    } else {
-        chars.div_ceil(width)
-    }
-}
-
-/// Split `s` into chunks of at most `width` characters (Unicode scalar values).
-fn wrap_chunks(s: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    let chars: Vec<char> = s.chars().collect();
-    if chars.is_empty() {
-        return vec![String::new()];
-    }
-    chars
-        .chunks(width)
-        .map(|chunk| chunk.iter().collect())
-        .collect()
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
