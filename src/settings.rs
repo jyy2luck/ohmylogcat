@@ -1,4 +1,4 @@
-use crate::ui::ThemePreference;
+use crate::ui::{LanguagePreference, ThemePreference};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -13,6 +13,8 @@ pub struct Settings {
     pub soft_wrap: bool,
     #[serde(default)]
     pub theme: ThemePreference,
+    #[serde(default)]
+    pub language: LanguagePreference,
 }
 
 fn default_true() -> bool {
@@ -27,6 +29,7 @@ impl Default for Settings {
             auto_scroll_to_end: true,
             soft_wrap: false,
             theme: ThemePreference::default(),
+            language: LanguagePreference::default(),
         }
     }
 }

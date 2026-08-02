@@ -110,11 +110,11 @@ impl FindState {
         self.matches.get(self.current).copied()
     }
 
-    pub fn counter_text(&self) -> String {
+    pub fn counter_text(&self, zero_matches: &str) -> String {
         if self.input.text.trim().is_empty() {
             String::new()
         } else if self.matches.is_empty() {
-            "0 matches".into()
+            zero_matches.into()
         } else {
             format!("{}/{}", self.current + 1, self.matches.len())
         }

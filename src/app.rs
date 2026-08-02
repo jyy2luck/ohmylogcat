@@ -8,9 +8,10 @@ use crate::settings::{
 };
 use crate::ui::{
     clamp_log_pos, expand_line, expand_word, format_log_line, line_spans, log_pos_to_screen,
-    mouse_to_log_pos, reset_pointer_shape, set_pointer_shape, step_caret_horizontal, visible_chars,
-    wrap_line_count, FindState, LogPos, PointerShape, TextInput, TextSelection, Theme,
-    ThemePreference, ViewportMap, WrapChunks, TEXT_INPUT_CURSOR_STYLE,
+    mouse_to_log_pos, reset_pointer_shape, set_pointer_shape, step_caret_horizontal,
+    str_display_width, visible_chars, wrap_line_count, FindState, LanguagePreference, Locale,
+    LogPos, PointerShape, TextInput, TextSelection, Theme, ThemePreference, UiStrings,
+    ViewportMap, WrapChunks, TEXT_INPUT_CURSOR_STYLE,
 };
 use crossterm::cursor::SetCursorStyle;
 use crossterm::execute;
@@ -64,6 +65,7 @@ enum SettingsField {
     Preset,
     Custom,
     Theme,
+    Language,
 }
 
 #[derive(Debug)]
@@ -74,6 +76,7 @@ pub struct SettingsPanelState {
     pub preset: BufferPreset,
     pub custom_capacity: String,
     pub theme: ThemePreference,
+    pub language: LanguagePreference,
     pub status: Option<String>,
     focus_field: SettingsField,
 }
@@ -88,22 +91,25 @@ impl SettingsPanelState {
             preset,
             custom_capacity: settings.buffer_capacity.to_string(),
             theme: settings.theme,
+            language: settings.language,
             status: None,
             focus_field: SettingsField::Adb,
         }
     }
 
     fn visible_fields(preset: BufferPreset) -> &'static [SettingsField] {
-        static WITH_CUSTOM: [SettingsField; 4] = [
+        static WITH_CUSTOM: [SettingsField; 5] = [
             SettingsField::Adb,
             SettingsField::Preset,
             SettingsField::Custom,
             SettingsField::Theme,
+            SettingsField::Language,
         ];
-        static WITHOUT_CUSTOM: [SettingsField; 3] = [
+        static WITHOUT_CUSTOM: [SettingsField; 4] = [
             SettingsField::Adb,
             SettingsField::Preset,
             SettingsField::Theme,
+            SettingsField::Language,
         ];
         if preset == BufferPreset::Custom {
             &WITH_CUSTOM
@@ -166,6 +172,8 @@ pub struct OhmylogcatApp {
 
     settings: Settings,
     theme: Theme,
+    locale: Locale,
+    ui: UiStrings,
     devices: Vec<Device>,
     selected_serial: Option<String>,
     device_cursor: usize,
@@ -219,6 +227,8 @@ impl OhmylogcatApp {
         let rt = Runtime::new().expect("tokio runtime");
         let settings = load_settings();
         let theme = Theme::resolve(settings.theme);
+        let locale = Locale::resolve(settings.language);
+        let ui = UiStrings::for_locale(locale);
         let (engine, event_rx) = Engine::new(settings.buffer_capacity);
 
         let mut app = Self {
@@ -266,11 +276,12 @@ impl OhmylogcatApp {
             should_quit: false,
             settings,
             theme,
+            locale,
+            ui,
         };
         if !keyboard_enhancement {
             app.set_ephemeral_status(
-                "Tip: keyboard enhancement unavailable — use Windows Terminal for full key support"
-                    .into(),
+                app.ui.tip_keyboard_enhancement.into(),
                 Duration::from_secs(8),
             );
         }
@@ -563,7 +574,9 @@ impl OhmylogcatApp {
             KeyCode::Enter => {
                 match self.engine.export_to_file(&path, filtered_only) {
                     Ok(()) => {
-                        self.set_status(format!("Exported to {}", path));
+                        self.set_status(
+                            self.ui.status_exported_to.replace("{}", &path),
+                        );
                         self.last_error = None;
                     }
                     Err(e) => self.last_error = Some(e),
@@ -609,6 +622,12 @@ impl OhmylogcatApp {
                 let forward = matches!(key.code, KeyCode::Right | KeyCode::Char('l'));
                 self.cycle_theme(forward);
             }
+            KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l')
+                if self.settings_panel.focus_field == SettingsField::Language =>
+            {
+                let forward = matches!(key.code, KeyCode::Right | KeyCode::Char('l'));
+                self.cycle_language(forward);
+            }
             KeyCode::Backspace => {
                 match self.settings_panel.focus_field {
                     SettingsField::Adb => {
@@ -624,7 +643,7 @@ impl OhmylogcatApp {
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !matches!(
                         self.settings_panel.focus_field,
-                        SettingsField::Preset | SettingsField::Theme
+                        SettingsField::Preset | SettingsField::Theme | SettingsField::Language
                     ) =>
             {
                 match self.settings_panel.focus_field {
@@ -870,11 +889,11 @@ impl OhmylogcatApp {
         };
         match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text)) {
             Ok(()) => {
-                self.set_status("Copied selection".into());
+                self.set_status(self.ui.status_copied.into());
                 true
             }
             Err(e) => {
-                self.last_error = Some(format!("Copy failed: {e}"));
+                self.last_error = Some(self.ui.status_copy_failed.replace("{}", &e.to_string()));
                 true
             }
         }
@@ -1604,6 +1623,10 @@ impl OhmylogcatApp {
         self.settings_panel.theme = self.settings_panel.theme.cycle(forward);
     }
 
+    fn cycle_language(&mut self, forward: bool) {
+        self.settings_panel.language = self.settings_panel.language.cycle(forward);
+    }
+
     fn save_settings_panel(&mut self) {
         let settings = Settings {
             adb_path: if self.settings_panel.adb_path.trim().is_empty() {
@@ -1615,15 +1638,19 @@ impl OhmylogcatApp {
             auto_scroll_to_end: self.auto_scroll,
             soft_wrap: self.soft_wrap,
             theme: self.settings_panel.theme,
+            language: self.settings_panel.language,
         };
         match save_settings(&settings) {
             Ok(()) => {
                 self.settings.adb_path = settings.adb_path.clone();
                 self.settings.buffer_capacity = settings.buffer_capacity;
                 self.settings.theme = settings.theme;
+                self.settings.language = settings.language;
                 self.theme = Theme::resolve(settings.theme);
+                self.locale = Locale::resolve(settings.language);
+                self.ui = UiStrings::for_locale(self.locale);
                 self.engine.set_capacity(settings.buffer_capacity);
-                self.set_status("Settings saved".into());
+                self.set_status(self.ui.status_settings_saved.into());
                 self.close_modal();
             }
             Err(e) => self.settings_panel.status = Some(e),
@@ -1774,22 +1801,39 @@ impl OhmylogcatApp {
 
     fn draw_toolbar(&mut self, frame: &mut Frame, area: Rect) {
         let paused = self.engine.is_paused();
-        let pause_label = if paused { "Resume" } else { "Pause" };
+        let pause_label = if paused {
+            self.ui.toolbar_resume
+        } else {
+            self.ui.toolbar_pause
+        };
         let follow_mark = if self.auto_scroll { "*" } else { " " };
         let wrap_mark = if self.soft_wrap { "*" } else { " " };
         let device_label = self
             .selected_serial
             .as_deref()
-            .unwrap_or("(none)");
+            .unwrap_or(self.ui.none_device);
+        let ui = self.ui;
 
         let labels: Vec<(String, ToolbarHit)> = vec![
-            (format!("[d]Dev:{device_label}"), ToolbarHit::Devices),
+            (
+                format!("[d]{}:{device_label}", ui.toolbar_dev),
+                ToolbarHit::Devices,
+            ),
             (format!("[Space]{pause_label}"), ToolbarHit::Pause),
-            ("[c]Clear".into(), ToolbarHit::Clear),
-            (format!("[f]Follow{follow_mark}"), ToolbarHit::Follow),
-            (format!("[w]Wrap{wrap_mark}"), ToolbarHit::Wrap),
-            ("[e]Export".into(), ToolbarHit::Export),
-            ("[s]Settings".into(), ToolbarHit::Settings),
+            (format!("[c]{}", ui.toolbar_clear), ToolbarHit::Clear),
+            (
+                format!("[f]{}{follow_mark}", ui.toolbar_follow),
+                ToolbarHit::Follow,
+            ),
+            (
+                format!("[w]{}{wrap_mark}", ui.toolbar_wrap),
+                ToolbarHit::Wrap,
+            ),
+            (format!("[e]{}", ui.toolbar_export), ToolbarHit::Export),
+            (
+                format!("[s]{}", ui.toolbar_settings),
+                ToolbarHit::Settings,
+            ),
         ];
 
         let mut spans = Vec::new();
@@ -1799,7 +1843,7 @@ impl OhmylogcatApp {
                 spans.push(Span::raw(" │ "));
                 x = x.saturating_add(3);
             }
-            let width = label.chars().count() as u16;
+            let width = str_display_width(label);
             let rect = Rect {
                 x,
                 y: area.y,
@@ -1817,7 +1861,7 @@ impl OhmylogcatApp {
         }
         spans.push(Span::raw(" │ "));
         spans.push(Span::styled(
-            "[q]Quit",
+            format!("[q]{}", ui.toolbar_quit),
             Style::default()
                 .fg(self.theme.shell_fg)
                 .add_modifier(Modifier::BOLD),
@@ -1839,6 +1883,7 @@ impl OhmylogcatApp {
             .filter_level
             .map(|l| l.to_display())
             .unwrap_or("Verbose");
+        let ui = self.ui;
 
         let summary_style = Style::default().fg(self.theme.shell_fg);
         let shortcut_style = Style::default()
@@ -1848,12 +1893,12 @@ impl OhmylogcatApp {
 
         let tag_value = truncate_input(&self.filter_tag.text, 16);
         let msg_value = truncate_input(&self.filter_message.text, 24);
-        let tag_label = format!("[t]Tag[{tag_value}] ");
-        let msg_label = format!("[m]Message[{msg_value}] ");
-        let level_label = format!("[l]Level[{level_text}]");
+        let tag_label = format!("[t]{}[{tag_value}] ", ui.filter_tag);
+        let msg_label = format!("[m]{}[{msg_value}] ", ui.filter_message);
+        let level_label = format!("[l]{}[{level_text}]", ui.filter_level);
 
         let mut x = area.x;
-        let tag_w = tag_label.chars().count() as u16;
+        let tag_w = str_display_width(&tag_label);
         self.hit_map.filter_tag = Some(Rect {
             x,
             y: area.y,
@@ -1861,7 +1906,7 @@ impl OhmylogcatApp {
             height: 1,
         });
         x = x.saturating_add(tag_w + 1);
-        let msg_w = msg_label.chars().count() as u16;
+        let msg_w = str_display_width(&msg_label);
         self.hit_map.filter_message = Some(Rect {
             x,
             y: area.y,
@@ -1869,7 +1914,7 @@ impl OhmylogcatApp {
             height: 1,
         });
         x = x.saturating_add(msg_w + 1);
-        let level_w = level_label.chars().count() as u16;
+        let level_w = str_display_width(&level_label);
         self.hit_map.filter_level = Some(Rect {
             x,
             y: area.y,
@@ -1879,24 +1924,27 @@ impl OhmylogcatApp {
 
         let line = Line::from(vec![
             Span::styled("[t]", shortcut_style),
-            Span::styled(format!("Tag[{tag_value}] "), summary_style),
+            Span::styled(format!("{}[{tag_value}] ", ui.filter_tag), summary_style),
             Span::styled("[m]", shortcut_style),
-            Span::styled(format!("Message[{msg_value}] "), summary_style),
+            Span::styled(
+                format!("{}[{msg_value}] ", ui.filter_message),
+                summary_style,
+            ),
             Span::styled("[l]", shortcut_style),
-            Span::styled(format!("Level[{level_text}]"), level_style),
-            Span::styled("  (click Tag/Message)", summary_style),
+            Span::styled(format!("{}[{level_text}]", ui.filter_level), level_style),
+            Span::styled(ui.filter_click_hint, summary_style),
         ]);
         frame.render_widget(Paragraph::new(line), area);
     }
 
     fn draw_find(&mut self, frame: &mut Frame, area: Rect) {
         let style = field_style(self.focus == Focus::Find, &self.theme);
-        let counter = self.find.counter_text();
+        let counter = self.find.counter_text(self.ui.find_zero_matches);
         let query = &self.find.input.text;
-        let prefix = "Find:[";
-        let suffix = format!("] {counter}  (Enter next · Shift+Enter prev · Esc close)");
-        let value_width = query.chars().count().max(1) as u16;
-        let prefix_width = prefix.chars().count() as u16;
+        let prefix = self.ui.find_prefix;
+        let suffix = format!("] {counter}{}", self.ui.find_help_suffix);
+        let value_width = str_display_width(query).max(1);
+        let prefix_width = str_display_width(prefix);
         let value_start_col = area.x.saturating_add(prefix_width);
         self.hit_map.find_input = Some(Rect {
             x: value_start_col,
@@ -1943,7 +1991,7 @@ impl OhmylogcatApp {
 
         if row_count == 0 {
             items.push(ListItem::new(Span::styled(
-                "No logs — press [d] to select a device",
+                self.ui.empty_logs,
                 Style::default().fg(self.theme.shell_hint),
             )));
             frame.render_widget(List::new(items), area);
@@ -2030,19 +2078,27 @@ impl OhmylogcatApp {
 
     fn draw_status(&self, frame: &mut Frame, area: Rect) {
         let live = self.engine.is_streaming();
-        let live_txt = if live { "● Live" } else { "○ Idle" };
+        let live_txt = if live {
+            self.ui.status_live
+        } else {
+            self.ui.status_idle
+        };
         let focus_hint = match self.focus {
-            Focus::Logs => "focus:logs",
-            Focus::Level => "focus:level",
-            Focus::Find => "focus:find",
-            Focus::Modal => "focus:modal",
+            Focus::Logs => self.ui.focus_logs,
+            Focus::Level => self.ui.focus_level,
+            Focus::Find => self.ui.focus_find,
+            Focus::Modal => self.ui.focus_modal,
         };
         let err = self
             .last_error
             .as_deref()
             .or(self.status_message.as_deref())
             .unwrap_or("");
-        let wrap_hint = if self.soft_wrap { "wrap:on" } else { "wrap:off" };
+        let wrap_hint = if self.soft_wrap {
+            self.ui.wrap_on
+        } else {
+            self.ui.wrap_off
+        };
         let filtered = self.engine.filtered_len();
         let text = format!(
             "{}  {}/{}/{}  {:.0} lines/s  ~{:.1} MB  {}  {}  {}",
@@ -2069,16 +2125,18 @@ impl OhmylogcatApp {
         let popup = centered_rect(60, 50, area);
         frame.render_widget(Clear, popup);
 
+        let ui = self.ui;
         match kind {
             ModalKind::Devices => {
                 let mut lines = vec![
-                    Line::from("Select device  (↑↓ · Enter · r refresh · Esc)"),
+                    Line::from(ui.modal_devices_help),
                     Line::from(""),
                 ];
                 let none_selected = self.device_cursor == 0;
                 lines.push(Line::from(format!(
-                    "{} (none)",
-                    if none_selected { ">" } else { " " }
+                    "{} {}",
+                    if none_selected { ">" } else { " " },
+                    ui.none_device
                 )));
                 for (i, d) in self.devices.iter().enumerate() {
                     let sel = self.device_cursor == i + 1;
@@ -2090,21 +2148,21 @@ impl OhmylogcatApp {
                     )));
                 }
                 let block = Block::default()
-                    .title(" Devices ")
+                    .title(ui.modal_devices_title)
                     .borders(Borders::ALL);
                 frame.render_widget(Paragraph::new(lines).block(block), popup);
             }
             ModalKind::ExportMenu => {
                 let lines = vec![
-                    Line::from("Export"),
+                    Line::from(ui.toolbar_export),
                     Line::from(""),
-                    Line::from("[1]/f] Export filtered"),
-                    Line::from("[2]/a] Export all"),
+                    Line::from(ui.modal_export_filtered),
+                    Line::from(ui.modal_export_all),
                     Line::from(""),
-                    Line::from("Esc cancel"),
+                    Line::from(ui.modal_export_cancel),
                 ];
                 let block = Block::default()
-                    .title(" Export ")
+                    .title(ui.modal_export_title)
                     .borders(Borders::ALL);
                 frame.render_widget(Paragraph::new(lines).block(block), popup);
             }
@@ -2113,12 +2171,12 @@ impl OhmylogcatApp {
                 path,
             } => {
                 let title = if filtered_only {
-                    " Export filtered "
+                    ui.modal_export_filtered_title
                 } else {
-                    " Export all "
+                    ui.modal_export_all_title
                 };
                 let lines = vec![
-                    Line::from("Path (Enter confirm · Esc cancel):"),
+                    Line::from(ui.modal_export_path_prompt),
                     Line::from(""),
                     Line::from(format!("[{}]", path)),
                 ];
@@ -2129,41 +2187,49 @@ impl OhmylogcatApp {
                 let focus = self.settings_panel.focus_field;
                 let mark = |field: SettingsField| if focus == field { ">" } else { " " };
                 let mut lines = vec![
-                    Line::from(
-                        "↑/↓ move (j/k) · ←/→ adjust (h/l) · type text · Enter save · Esc cancel",
-                    ),
+                    Line::from(ui.modal_settings_help),
                     Line::from(""),
                 ];
                 for &field in SettingsPanelState::visible_fields(self.settings_panel.preset) {
                     match field {
                         SettingsField::Adb => {
                             lines.push(Line::from(format!(
-                                "{} ADB: [{}]",
+                                "{} {}: [{}]",
                                 mark(field),
+                                ui.settings_adb,
                                 self.settings_panel.adb_path
                             )));
                             if self.settings_panel.adb_path.trim().is_empty() {
                                 let hint = match &self.settings_panel.auto_adb {
-                                    Some(path) => format!("  (using: {path})"),
-                                    None => "  (adb not found)".into(),
+                                    Some(path) => ui.settings_using.replace("{}", path),
+                                    None => ui.settings_adb_not_found.into(),
                                 };
                                 lines.push(Line::from(hint));
                             }
                         }
                         SettingsField::Preset => lines.push(Line::from(format!(
-                            "{} Preset: {}",
+                            "{} {}: {}",
                             mark(field),
+                            ui.settings_preset,
                             self.settings_panel.preset.label()
                         ))),
                         SettingsField::Custom => lines.push(Line::from(format!(
-                            "{} Custom: [{}]",
+                            "{} {}: [{}]",
                             mark(field),
+                            ui.settings_custom,
                             self.settings_panel.custom_capacity
                         ))),
                         SettingsField::Theme => lines.push(Line::from(format!(
-                            "{} Theme: {}",
+                            "{} {}: {}",
                             mark(field),
+                            ui.settings_theme,
                             self.settings_panel.theme.label()
+                        ))),
+                        SettingsField::Language => lines.push(Line::from(format!(
+                            "{} {}: {}",
+                            mark(field),
+                            ui.settings_language,
+                            self.settings_panel.language.label()
                         ))),
                     }
                 }
@@ -2172,30 +2238,30 @@ impl OhmylogcatApp {
                     lines.push(Line::from(s.clone()));
                 }
                 let block = Block::default()
-                    .title(" Settings ")
+                    .title(ui.modal_settings_title)
                     .borders(Borders::ALL);
                 frame.render_widget(Paragraph::new(lines).block(block), popup);
             }
             ModalKind::FilterEdit { field } => {
                 let (title, label, input) = match field {
                     FilterField::Tag => (
-                        " Tag filter ",
-                        "Tag contains:",
+                        ui.modal_tag_filter_title,
+                        ui.filter_tag_contains,
                         &self.filter_tag,
                     ),
                     FilterField::Message => (
-                        " Message filter ",
-                        "Message contains:",
+                        ui.modal_message_filter_title,
+                        ui.filter_message_contains,
                         &self.filter_message,
                     ),
                 };
                 let value = &input.text;
                 let prefix = format!("{label} [");
-                let prefix_width = prefix.chars().count() as u16;
+                let prefix_width = str_display_width(&prefix);
                 let block = Block::default().title(title).borders(Borders::ALL);
                 let inner = block.inner(popup);
                 let value_start_col = inner.x.saturating_add(prefix_width);
-                let value_width = value.chars().count().max(1) as u16;
+                let value_width = str_display_width(value).max(1);
                 self.hit_map.filter_modal_input = Some(Rect {
                     x: value_start_col,
                     y: inner.y,
@@ -2212,7 +2278,7 @@ impl OhmylogcatApp {
                 let lines = vec![
                     Line::from(format!("{label} [{value}]")),
                     Line::from(""),
-                    Line::from("Live filter · Esc done"),
+                    Line::from(ui.filter_live_hint),
                 ];
                 frame.render_widget(Paragraph::new(lines).block(block), popup);
             }
