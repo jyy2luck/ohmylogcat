@@ -183,7 +183,7 @@ impl UiStrings {
 
     fn en() -> Self {
         Self {
-            toolbar_dev: "Dev",
+            toolbar_dev: "Device",
             toolbar_pause: "Pause",
             toolbar_resume: "Resume",
             toolbar_clear: "Clear",

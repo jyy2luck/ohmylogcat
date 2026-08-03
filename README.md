@@ -96,7 +96,7 @@ Maintainers: push a version tag to trigger [.github/workflows/release.yml](.gith
 
 ```bash
 git tag v0.1.0
-git push github v0.1.0
+git push origin v0.1.0
 ```
 
 ### Smoke checklist
