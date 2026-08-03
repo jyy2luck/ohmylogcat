@@ -145,7 +145,7 @@ The system SHALL expose primary actions (device selection entry, Pause/Resume, C
 
 ### Requirement: Tag and Message filter modal editors
 
-The system SHALL open an in-TUI modal overlay to edit Tag and Message filter strings, activated from the filter row by mouse click or by `t` / `m` from the log viewport on the top layer. Filter values SHALL apply to log filtering in real time as the user types. Text editing in these modals SHALL support a movable insertion cursor with insert, Backspace, and Delete at the cursor per the text input insertion cursor requirement. Pressing Esc SHALL close the modal and return focus to the log viewport without reverting filter values already applied.
+The system SHALL open an in-TUI modal overlay to edit Tag and Message filter strings, activated from the filter row by mouse click or by `t` / `m` from the log viewport on the top layer. Filter values SHALL apply to log filtering in real time as the user types. Text editing in these modals SHALL support a movable insertion cursor with insert, Backspace, and Delete at the cursor per the text input insertion cursor requirement. Pressing Enter SHALL close the modal and return focus to the log viewport without reverting filter values already applied. Pressing Esc SHALL use progressive dismiss: when the filter input is non-empty, Esc SHALL clear the input and the live filter SHALL update accordingly; when the input is already empty, Esc SHALL close the modal and return focus to the log viewport.
 
 #### Scenario: Open tag filter modal
 
@@ -157,15 +157,35 @@ The system SHALL open an in-TUI modal overlay to edit Tag and Message filter str
 - **WHEN** the Tag filter modal is open and the user types characters
 - **THEN** the Tag filter updates and filtered log output refreshes without requiring a separate confirm action
 
-#### Scenario: Close tag filter modal
+#### Scenario: Enter closes tag filter modal
 
-- **WHEN** the Tag filter modal is open and the user presses Esc
+- **WHEN** the Tag filter modal is open and the user presses Enter
 - **THEN** the modal closes, focus returns to the log viewport, and the current Tag filter value remains in effect
+
+#### Scenario: Esc clears non-empty tag filter input
+
+- **WHEN** the Tag filter modal is open, the input is non-empty, and the user presses Esc
+- **THEN** the input is cleared, the Tag filter is removed from active filtering in real time, and the modal remains open
+
+#### Scenario: Esc closes empty tag filter modal
+
+- **WHEN** the Tag filter modal is open, the input is empty, and the user presses Esc
+- **THEN** the modal closes and focus returns to the log viewport
 
 #### Scenario: Open message filter modal
 
 - **WHEN** the user clicks the Message summary in the filter row or presses `m` while on the top layer with log viewport focus
 - **THEN** a modal overlay opens with a text input for the Message filter substring and the insertion cursor at the end of the current value
+
+#### Scenario: Esc clears non-empty message filter input
+
+- **WHEN** the Message filter modal is open, the input is non-empty, and the user presses Esc
+- **THEN** the input is cleared, the Message filter is removed from active filtering in real time, and the modal remains open
+
+#### Scenario: Esc closes empty message filter modal
+
+- **WHEN** the Message filter modal is open, the input is empty, and the user presses Esc
+- **THEN** the modal closes and focus returns to the log viewport
 
 #### Scenario: q types in filter modal
 
@@ -228,36 +248,36 @@ The system SHALL maintain an explicit focus target among at least: log viewport,
 #### Scenario: Esc closes overlay
 
 - **WHEN** a modal is open or the find bar is open and the user presses Esc
-- **THEN** the overlay closes or the find bar closes and focus returns to the log viewport according to the overlay type
+- **THEN** the overlay closes or the find bar closes and focus returns to the log viewport according to the overlay type, except Tag and Message filter modals where Esc clears non-empty input before closing on a subsequent Esc when empty
 
 ### Requirement: Settings modal keyboard navigation
 
-The Settings modal SHALL use vertical arrow keys to move focus among visible settings rows and horizontal arrow keys to adjust cycle-type fields (buffer preset, theme, and language). The modal SHALL display a help line at the top documenting move, adjust, text entry, save, and cancel bindings. Focus SHALL always rest on a visible row; the Custom capacity row SHALL be included in navigation only when the buffer preset is Custom.
+The Settings modal SHALL use vertical arrow keys to move focus among visible settings rows and horizontal arrow keys to adjust cycle-type fields (buffer preset, theme, and language). Adjustments and text edits SHALL apply immediately to runtime state and persist to settings storage without requiring Enter. The modal SHALL display a help line at the top documenting move, adjust, text entry, and dismiss bindings. Focus SHALL always rest on a visible row; the Custom capacity row SHALL be included in navigation only when the buffer preset is Custom. Pressing Enter or Esc SHALL close the modal and return focus to the log viewport without an additional save or cancel step.
 
 #### Scenario: Move focus with vertical keys
 
-- **WHEN** the Settings modal is open and the user presses Up, Down, `k`, or `j`
+- **WHEN** the Settings modal is open and the user presses Up or Down
 - **THEN** the focus cursor moves to the previous or next visible settings row and the `>` marker follows the focused row
 
 #### Scenario: Adjust preset with horizontal keys
 
-- **WHEN** the Settings modal is open, buffer preset is focused, and the user presses Left, Right, `h`, or `l`
-- **THEN** the buffer preset cycles backward or forward through available presets
+- **WHEN** the Settings modal is open, buffer preset is focused, and the user presses Left or Right
+- **THEN** the buffer preset cycles backward or forward, buffer capacity updates immediately, and the new value is persisted
 
 #### Scenario: Adjust theme with horizontal keys
 
-- **WHEN** the Settings modal is open, theme is focused, and the user presses Left, Right, `h`, or `l`
-- **THEN** the theme preference cycles backward or forward
+- **WHEN** the Settings modal is open, theme is focused, and the user presses Left or Right
+- **THEN** the theme preference cycles backward or forward, the active theme updates immediately, and the new value is persisted
 
 #### Scenario: Adjust language with horizontal keys
 
-- **WHEN** the Settings modal is open, language is focused, and the user presses Left, Right, `h`, or `l`
-- **THEN** the language preference cycles backward or forward
+- **WHEN** the Settings modal is open, language is focused, and the user presses Left or Right
+- **THEN** the language preference cycles backward or forward, UI chrome updates immediately, and the new value is persisted
 
 #### Scenario: Text fields use direct typing
 
 - **WHEN** the Settings modal is open, ADB path or Custom capacity is focused, and the user types printable characters or presses Backspace
-- **THEN** the focused text field is edited append-only and Left/Right do not change the field value
+- **THEN** the focused text field is edited append-only, Left/Right do not change the field value, and the updated value is persisted after the edit
 
 #### Scenario: Custom row hidden from navigation
 
@@ -272,12 +292,12 @@ The Settings modal SHALL use vertical arrow keys to move focus among visible set
 #### Scenario: Help line documents controls
 
 - **WHEN** the Settings modal is rendered
-- **THEN** the first content line documents vertical move, horizontal adjust, text entry, Enter save, and Esc cancel
+- **THEN** the first content line documents vertical move, horizontal adjust with immediate apply, text entry, and Enter/Esc dismiss
 
-#### Scenario: Save and cancel unchanged
+#### Scenario: Enter or Esc dismisses settings modal
 
 - **WHEN** the Settings modal is open and the user presses Enter or Esc
-- **THEN** settings are persisted and the modal closes, or the modal closes without saving, per existing Settings save behavior
+- **THEN** the modal closes and focus returns to the log viewport without reverting settings already applied and persisted
 
 ### Requirement: Modal panels for settings and path prompts
 
@@ -299,7 +319,7 @@ The Settings modal SHALL include a Language row that cycles through Auto, Englis
 
 #### Scenario: Adjust language with horizontal keys
 
-- **WHEN** the Settings modal is open, language is focused, and the user presses Left, Right, `h`, or `l`
+- **WHEN** the Settings modal is open, language is focused, and the user presses Left or Right
 - **THEN** the language preference cycles backward or forward through Auto, English, Simplified Chinese, and Traditional Chinese
 
 #### Scenario: Language option labels stay fixed

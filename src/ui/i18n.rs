@@ -134,7 +134,6 @@ pub struct UiStrings {
     pub wrap_off: &'static str,
 
     // Ephemeral status
-    pub status_settings_saved: &'static str,
     pub status_exported_to: &'static str,
     pub status_copied: &'static str,
     pub status_copy_failed: &'static str,
@@ -214,7 +213,6 @@ impl UiStrings {
             wrap_on: "wrap:on",
             wrap_off: "wrap:off",
 
-            status_settings_saved: "Settings saved",
             status_exported_to: "Exported to {}",
             status_copied: "Copied selection",
             status_copy_failed: "Copy failed: {}",
@@ -234,20 +232,20 @@ impl UiStrings {
 
             modal_settings_title: " Settings ",
             modal_settings_help:
-                "↑/↓ move (j/k) · ←/→ adjust (h/l) · type text · Enter save · Esc cancel",
+                "↑/↓ move · ←/→ adjust · Applies immediately · Enter/Esc dismiss",
             settings_adb: "ADB",
             settings_preset: "Preset",
             settings_custom: "Custom",
             settings_theme: "Theme",
             settings_language: "Language",
-            settings_using: "  (using: {})",
+            settings_using: "  (Using: {})",
             settings_adb_not_found: "  (adb not found)",
 
             modal_tag_filter_title: " Tag filter ",
             modal_message_filter_title: " Message filter ",
             filter_tag_contains: "Tag contains:",
             filter_message_contains: "Message contains:",
-            filter_live_hint: "Live filter · Esc done",
+            filter_live_hint: "Live filter · Esc clear/close · Enter done",
         }
     }
 
@@ -284,7 +282,6 @@ impl UiStrings {
             wrap_on: "换行:开",
             wrap_off: "换行:关",
 
-            status_settings_saved: "设置已保存",
             status_exported_to: "已导出到 {}",
             status_copied: "已复制选区",
             status_copy_failed: "复制失败: {}",
@@ -304,7 +301,7 @@ impl UiStrings {
 
             modal_settings_title: " 设置 ",
             modal_settings_help:
-                "↑/↓ 移动 (j/k) · ←/→ 调整 (h/l) · 输入文本 · Enter 保存 · Esc 取消",
+                "↑/↓ 移动 · ←/→ 调整 · 即时生效 · Enter/Esc 关闭",
             settings_adb: "ADB",
             settings_preset: "预设",
             settings_custom: "自定义",
@@ -317,7 +314,7 @@ impl UiStrings {
             modal_message_filter_title: " 消息筛选 ",
             filter_tag_contains: "标签包含:",
             filter_message_contains: "消息包含:",
-            filter_live_hint: "实时筛选 · Esc 完成",
+            filter_live_hint: "实时筛选 · Esc 清空/关闭 · Enter 完成",
         }
     }
 
@@ -354,7 +351,6 @@ impl UiStrings {
             wrap_on: "換行:開",
             wrap_off: "換行:關",
 
-            status_settings_saved: "設定已儲存",
             status_exported_to: "已匯出到 {}",
             status_copied: "已複製選區",
             status_copy_failed: "複製失敗: {}",
@@ -374,7 +370,7 @@ impl UiStrings {
 
             modal_settings_title: " 設定 ",
             modal_settings_help:
-                "↑/↓ 移動 (j/k) · ←/→ 調整 (h/l) · 輸入文字 · Enter 儲存 · Esc 取消",
+                "↑/↓ 移動 · ←/→ 調整 · 即時生效 · Enter/Esc 關閉",
             settings_adb: "ADB",
             settings_preset: "預設",
             settings_custom: "自訂",
@@ -387,7 +383,7 @@ impl UiStrings {
             modal_message_filter_title: " 訊息篩選 ",
             filter_tag_contains: "標籤包含:",
             filter_message_contains: "訊息包含:",
-            filter_live_hint: "即時篩選 · Esc 完成",
+            filter_live_hint: "即時篩選 · Esc 清空/關閉 · Enter 完成",
         }
     }
 }

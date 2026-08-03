@@ -17,17 +17,17 @@ The system SHALL support a language preference with exactly four values: Auto, E
 
 #### Scenario: Explicit English preference
 
-- **WHEN** the user selects English as the language preference and saves settings
+- **WHEN** the user selects English as the language preference in Settings
 - **THEN** subsequent UI chrome is rendered in English regardless of the system locale
 
 #### Scenario: Explicit Simplified Chinese preference
 
-- **WHEN** the user selects Simplified Chinese as the language preference and saves settings
+- **WHEN** the user selects Simplified Chinese as the language preference in Settings
 - **THEN** subsequent UI chrome is rendered in Simplified Chinese
 
 #### Scenario: Explicit Traditional Chinese preference
 
-- **WHEN** the user selects Traditional Chinese as the language preference and saves settings
+- **WHEN** the user selects Traditional Chinese as the language preference in Settings
 - **THEN** subsequent UI chrome is rendered in Traditional Chinese
 
 ### Requirement: Auto resolves from system locale
@@ -80,9 +80,9 @@ The system SHALL render user-facing TUI chrome strings (toolbar labels, filter l
 
 ### Requirement: Language applies on settings save
 
-The system SHALL recompute the active UI locale from the saved language preference when settings are successfully saved, so chrome updates immediately without requiring an application restart.
+The system SHALL recompute the active UI locale from the language preference immediately when the user adjusts the Language row in the Settings modal, so chrome updates without requiring Enter save or an application restart.
 
-#### Scenario: Immediate locale switch after save
+#### Scenario: Immediate locale switch when adjusting language
 
-- **WHEN** the user changes language from Auto to Traditional Chinese and saves settings
-- **THEN** the Settings modal closes (or the shell continues) with chrome rendered in Traditional Chinese without restarting the process
+- **WHEN** the Settings modal is open, language is focused, and the user cycles language from Auto to Traditional Chinese
+- **THEN** chrome in the Settings modal and main shell updates to Traditional Chinese without pressing Enter and without restarting the process

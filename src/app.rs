@@ -506,7 +506,20 @@ impl OhmylogcatApp {
 
     fn handle_filter_edit_modal_key(&mut self, key: KeyEvent, field: FilterField) {
         match key.code {
-            KeyCode::Esc => self.close_modal(),
+            KeyCode::Enter => self.close_modal(),
+            KeyCode::Esc => {
+                let input = match field {
+                    FilterField::Tag => &mut self.filter_tag,
+                    FilterField::Message => &mut self.filter_message,
+                };
+                if input.text.is_empty() {
+                    self.close_modal();
+                } else {
+                    input.text.clear();
+                    input.cursor = 0;
+                    self.mark_filter_dirty();
+                }
+            }
             _ => {
                 let input = match field {
                     FilterField::Tag => &mut self.filter_tag,
@@ -606,35 +619,36 @@ impl OhmylogcatApp {
 
     fn handle_settings_modal_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Esc => self.close_modal(),
-            KeyCode::Enter => self.save_settings_panel(),
-            KeyCode::Up | KeyCode::Char('k') => self.settings_panel.move_focus(-1),
-            KeyCode::Down | KeyCode::Char('j') => self.settings_panel.move_focus(1),
-            KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l')
+            KeyCode::Esc | KeyCode::Enter => self.close_modal(),
+            KeyCode::Up => self.settings_panel.move_focus(-1),
+            KeyCode::Down => self.settings_panel.move_focus(1),
+            KeyCode::Left | KeyCode::Right
                 if self.settings_panel.focus_field == SettingsField::Preset =>
             {
-                let forward = matches!(key.code, KeyCode::Right | KeyCode::Char('l'));
+                let forward = key.code == KeyCode::Right;
                 self.cycle_preset(forward);
             }
-            KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l')
+            KeyCode::Left | KeyCode::Right
                 if self.settings_panel.focus_field == SettingsField::Theme =>
             {
-                let forward = matches!(key.code, KeyCode::Right | KeyCode::Char('l'));
+                let forward = key.code == KeyCode::Right;
                 self.cycle_theme(forward);
             }
-            KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l')
+            KeyCode::Left | KeyCode::Right
                 if self.settings_panel.focus_field == SettingsField::Language =>
             {
-                let forward = matches!(key.code, KeyCode::Right | KeyCode::Char('l'));
+                let forward = key.code == KeyCode::Right;
                 self.cycle_language(forward);
             }
             KeyCode::Backspace => {
                 match self.settings_panel.focus_field {
                     SettingsField::Adb => {
                         self.settings_panel.adb_path.pop();
+                        self.commit_settings_from_panel();
                     }
                     SettingsField::Custom => {
                         self.settings_panel.custom_capacity.pop();
+                        self.commit_settings_from_panel();
                     }
                     _ => {}
                 }
@@ -647,10 +661,14 @@ impl OhmylogcatApp {
                     ) =>
             {
                 match self.settings_panel.focus_field {
-                    SettingsField::Adb => self.settings_panel.adb_path.push(c),
+                    SettingsField::Adb => {
+                        self.settings_panel.adb_path.push(c);
+                        self.commit_settings_from_panel();
+                    }
                     SettingsField::Custom => {
                         if c.is_ascii_digit() {
                             self.settings_panel.custom_capacity.push(c);
+                            self.commit_settings_from_panel();
                         }
                     }
                     _ => {}
@@ -1617,17 +1635,20 @@ impl OhmylogcatApp {
         if was_custom_focus && self.settings_panel.preset != BufferPreset::Custom {
             self.settings_panel.focus_field = SettingsField::Preset;
         }
+        self.commit_settings_from_panel();
     }
 
     fn cycle_theme(&mut self, forward: bool) {
         self.settings_panel.theme = self.settings_panel.theme.cycle(forward);
+        self.commit_settings_from_panel();
     }
 
     fn cycle_language(&mut self, forward: bool) {
         self.settings_panel.language = self.settings_panel.language.cycle(forward);
+        self.commit_settings_from_panel();
     }
 
-    fn save_settings_panel(&mut self) {
+    fn commit_settings_from_panel(&mut self) {
         let settings = Settings {
             adb_path: if self.settings_panel.adb_path.trim().is_empty() {
                 None
@@ -1650,8 +1671,7 @@ impl OhmylogcatApp {
                 self.locale = Locale::resolve(settings.language);
                 self.ui = UiStrings::for_locale(self.locale);
                 self.engine.set_capacity(settings.buffer_capacity);
-                self.set_status(self.ui.status_settings_saved.into());
-                self.close_modal();
+                self.settings_panel.status = None;
             }
             Err(e) => self.settings_panel.status = Some(e),
         }
