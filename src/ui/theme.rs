@@ -123,7 +123,8 @@ fn rgb(r: u8, g: u8, b: u8) -> Color {
 }
 
 /// Heuristic from `$COLORFGBG` (fg;bg). Light when background index >= 7.
-/// Windows terminals often omit `$COLORFGBG`; assume light there.
+/// When unset (common on Windows cmd/PowerShell/Windows Terminal), assume dark —
+/// matching typical terminal defaults on both Windows and macOS/Linux.
 fn detect_light_background() -> bool {
     if let Some(bg) = std::env::var("COLORFGBG")
         .ok()
@@ -131,7 +132,7 @@ fn detect_light_background() -> bool {
     {
         return bg >= 7;
     }
-    cfg!(windows)
+    false
 }
 
 #[cfg(test)]
@@ -156,16 +157,12 @@ mod tests {
     }
 
     #[test]
-    fn auto_resolves_to_light_on_windows_without_colorfgbg() {
+    fn auto_resolves_to_dark_without_colorfgbg() {
         if std::env::var("COLORFGBG").is_ok() {
             return;
         }
         let theme = Theme::resolve(ThemePreference::Auto);
-        if cfg!(windows) {
-            assert_eq!(theme.shell_fg, Color::Black);
-            assert_eq!(theme.level_info, Color::Black);
-        } else {
-            assert_eq!(theme.shell_fg, Theme::dark().shell_fg);
-        }
+        assert_eq!(theme.shell_fg, Theme::dark().shell_fg);
+        assert_eq!(theme.level_info, Theme::dark().level_info);
     }
 }
