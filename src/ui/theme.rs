@@ -1,44 +1,10 @@
 use crate::parser::LogLevel;
 use ratatui::style::Color;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ThemePreference {
-    #[default]
-    Auto,
-    Dark,
-    Light,
-}
-
-impl ThemePreference {
-    pub const ALL: [Self; 3] = [Self::Auto, Self::Dark, Self::Light];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Auto => "Auto",
-            Self::Dark => "Dark",
-            Self::Light => "Light",
-        }
-    }
-
-    pub fn cycle(self, forward: bool) -> Self {
-        let idx = Self::ALL.iter().position(|p| *p == self).unwrap_or(0);
-        let next = if forward {
-            (idx + 1) % Self::ALL.len()
-        } else {
-            (idx + Self::ALL.len() - 1) % Self::ALL.len()
-        };
-        Self::ALL[next]
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
+/// Fixed semantic accent palette. Shell chrome inherits the terminal default;
+/// only levels, focus, selection, and find use these colors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
-    pub shell_fg: Color,
-    pub shell_muted: Color,
-    pub shell_divider: Color,
-    pub shell_hint: Color,
     pub level_verbose: Color,
     pub level_debug: Color,
     pub level_info: Color,
@@ -53,57 +19,20 @@ pub struct Theme {
 }
 
 impl Theme {
-    pub fn dark() -> Self {
+    /// Single fixed accent palette (named/ANSI colors that follow the host table).
+    pub fn accents() -> Self {
         Self {
-            shell_fg: rgb(212, 212, 212),
-            shell_muted: rgb(140, 140, 140),
-            shell_divider: rgb(80, 80, 80),
-            shell_hint: rgb(120, 120, 120),
-            level_verbose: rgb(128, 128, 128),
-            level_debug: rgb(86, 156, 214),
-            level_info: rgb(212, 212, 212),
-            level_warn: rgb(255, 204, 0),
-            level_error: rgb(244, 71, 71),
+            level_verbose: Color::DarkGray,
+            level_debug: Color::Cyan,
+            level_info: Color::Gray,
+            level_warn: Color::Yellow,
+            level_error: Color::Red,
             focus_fg: Color::Black,
-            focus_bg: rgb(255, 204, 0),
+            focus_bg: Color::Yellow,
             selection_fg: Color::White,
-            selection_bg: rgb(0, 100, 200),
+            selection_bg: Color::Blue,
             find_fg: Color::Black,
-            find_bg: rgb(255, 204, 0),
-        }
-    }
-
-    pub fn light() -> Self {
-        Self {
-            shell_fg: Color::Black,
-            shell_muted: rgb(90, 90, 90),
-            shell_divider: rgb(180, 180, 180),
-            shell_hint: rgb(100, 100, 100),
-            level_verbose: rgb(100, 100, 100),
-            level_debug: rgb(0, 92, 153),
-            level_info: Color::Black,
-            level_warn: rgb(180, 120, 0),
-            level_error: rgb(200, 40, 40),
-            focus_fg: Color::Black,
-            focus_bg: rgb(255, 204, 0),
-            selection_fg: Color::White,
-            selection_bg: rgb(0, 102, 204),
-            find_fg: Color::Black,
-            find_bg: rgb(255, 204, 0),
-        }
-    }
-
-    pub fn resolve(pref: ThemePreference) -> Self {
-        match pref {
-            ThemePreference::Dark => Self::dark(),
-            ThemePreference::Light => Self::light(),
-            ThemePreference::Auto => {
-                if detect_light_background() {
-                    Self::light()
-                } else {
-                    Self::dark()
-                }
-            }
+            find_bg: Color::Yellow,
         }
     }
 
@@ -118,21 +47,10 @@ impl Theme {
     }
 }
 
-fn rgb(r: u8, g: u8, b: u8) -> Color {
-    Color::Rgb(r, g, b)
-}
-
-/// Heuristic from `$COLORFGBG` (fg;bg). Light when background index >= 7.
-/// When unset (common on Windows cmd/PowerShell/Windows Terminal), assume dark —
-/// matching typical terminal defaults on both Windows and macOS/Linux.
-fn detect_light_background() -> bool {
-    if let Some(bg) = std::env::var("COLORFGBG")
-        .ok()
-        .and_then(|value| value.rsplit(';').next()?.parse::<u8>().ok())
-    {
-        return bg >= 7;
+impl Default for Theme {
+    fn default() -> Self {
+        Self::accents()
     }
-    false
 }
 
 #[cfg(test)]
@@ -140,29 +58,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dark_and_light_info_differ() {
-        assert_ne!(Theme::dark().level_info, Theme::light().level_info);
+    fn accents_are_stable_default() {
+        let theme = Theme::default();
+        assert_eq!(theme, Theme::accents());
+        assert_eq!(theme.level_error, Color::Red);
+        assert_eq!(theme.level_warn, Color::Yellow);
+        assert_ne!(theme.level_error, theme.level_info);
+        assert_ne!(theme.find_bg, theme.selection_bg);
     }
 
     #[test]
-    fn theme_preference_cycles() {
-        assert_eq!(
-            ThemePreference::Auto.cycle(true),
-            ThemePreference::Dark
-        );
-        assert_eq!(
-            ThemePreference::Dark.cycle(false),
-            ThemePreference::Auto
-        );
-    }
-
-    #[test]
-    fn auto_resolves_to_dark_without_colorfgbg() {
-        if std::env::var("COLORFGBG").is_ok() {
-            return;
-        }
-        let theme = Theme::resolve(ThemePreference::Auto);
-        assert_eq!(theme.shell_fg, Theme::dark().shell_fg);
-        assert_eq!(theme.level_info, Theme::dark().level_info);
+    fn level_color_maps_error_and_fatal() {
+        let theme = Theme::accents();
+        assert_eq!(theme.level_color(LogLevel::Error), theme.level_error);
+        assert_eq!(theme.level_color(LogLevel::Fatal), theme.level_error);
+        assert_eq!(theme.level_color(LogLevel::Info), theme.level_info);
     }
 }

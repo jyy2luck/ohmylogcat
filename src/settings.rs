@@ -1,4 +1,4 @@
-use crate::ui::{LanguagePreference, ThemePreference};
+use crate::ui::LanguagePreference;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -11,8 +11,6 @@ pub struct Settings {
     pub auto_scroll_to_end: bool,
     #[serde(default)]
     pub soft_wrap: bool,
-    #[serde(default)]
-    pub theme: ThemePreference,
     #[serde(default)]
     pub language: LanguagePreference,
 }
@@ -28,7 +26,6 @@ impl Default for Settings {
             buffer_capacity: 200_000,
             auto_scroll_to_end: true,
             soft_wrap: false,
-            theme: ThemePreference::default(),
             language: LanguagePreference::default(),
         }
     }
@@ -127,4 +124,25 @@ pub fn save_settings(settings: &Settings) -> Result<(), String> {
     }
     let data = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
     std::fs::write(&path, data).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_theme_field_is_ignored_and_omitted_on_serialize() {
+        let json = r#"{
+            "adbPath": null,
+            "bufferCapacity": 200000,
+            "autoScrollToEnd": true,
+            "softWrap": false,
+            "theme": "dark",
+            "language": "auto"
+        }"#;
+        let settings: Settings = serde_json::from_str(json).expect("deserialize");
+        let out = serde_json::to_string(&settings).expect("serialize");
+        assert!(!out.contains("theme"));
+        assert_eq!(settings.buffer_capacity, 200_000);
+    }
 }

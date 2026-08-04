@@ -1,46 +1,4 @@
-# app-settings Specification
-
-## Purpose
-TBD - created by archiving change mvp-logcat-viewer. Update Purpose after archive.
-
-## Requirements
-
-### Requirement: Configure adb executable path
-
-The system SHALL allow the user to set the absolute path to the adb executable and persist it across sessions.
-
-#### Scenario: Custom adb path on Windows
-
-- **WHEN** the user sets adb path to `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`
-- **THEN** subsequent device discovery and log streaming use that executable
-
-#### Scenario: Default adb path
-
-- **WHEN** no custom adb path is configured
-- **THEN** the system attempts to use `adb` from PATH, with platform-specific common SDK locations as fallback hints only
-
-### Requirement: Persist buffer preset
-
-The system SHALL persist the selected buffer preset or custom line count and restore it on next launch.
-
-#### Scenario: Settings persist after restart
-
-- **WHEN** the user changes buffer preset to Heavy and restarts the application
-- **THEN** the buffer capacity remains 500,000 lines
-
-### Requirement: Persist language preference
-
-The system SHALL persist the selected language preference (Auto, English, Simplified Chinese, or Traditional Chinese) in settings storage and restore it on the next launch. Missing language fields in existing settings files SHALL default to Auto.
-
-#### Scenario: Language preference persists after restart
-
-- **WHEN** the user sets language to Simplified Chinese, saves settings, and restarts the application
-- **THEN** the language preference remains Simplified Chinese
-
-#### Scenario: Missing language field defaults to Auto
-
-- **WHEN** settings are loaded from a file that has no language field
-- **THEN** the language preference is Auto
+## MODIFIED Requirements
 
 ### Requirement: Settings accessible from UI
 
@@ -69,6 +27,8 @@ When the Settings modal is open, the system SHALL persist each settings field to
 
 - **WHEN** the user adjusts one or more settings fields and presses Esc or Enter to close the Settings modal
 - **THEN** all changes made during the session remain persisted and are restored on next launch
+
+## ADDED Requirements
 
 ### Requirement: Ignore legacy theme field
 

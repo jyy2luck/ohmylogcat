@@ -252,7 +252,7 @@ The system SHALL maintain an explicit focus target among at least: log viewport,
 
 ### Requirement: Settings modal keyboard navigation
 
-The Settings modal SHALL use vertical arrow keys to move focus among visible settings rows and horizontal arrow keys to adjust cycle-type fields (buffer preset, theme, and language). Adjustments and text edits SHALL apply immediately to runtime state and persist to settings storage without requiring Enter. The modal SHALL display a help line at the top documenting move, adjust, text entry, and dismiss bindings. Focus SHALL always rest on a visible row; the Custom capacity row SHALL be included in navigation only when the buffer preset is Custom. Pressing Enter or Esc SHALL close the modal and return focus to the log viewport without an additional save or cancel step.
+The Settings modal SHALL use vertical arrow keys to move focus among visible settings rows and horizontal arrow keys to adjust cycle-type fields (buffer preset and language). Adjustments and text edits SHALL apply immediately to runtime state and persist to settings storage without requiring Enter. The modal SHALL display a help line at the top documenting move, adjust, text entry, and dismiss bindings. Focus SHALL always rest on a visible row; the Custom capacity row SHALL be included in navigation only when the buffer preset is Custom. Pressing Enter or Esc SHALL close the modal and return focus to the log viewport without an additional save or cancel step.
 
 #### Scenario: Move focus with vertical keys
 
@@ -263,11 +263,6 @@ The Settings modal SHALL use vertical arrow keys to move focus among visible set
 
 - **WHEN** the Settings modal is open, buffer preset is focused, and the user presses Left or Right
 - **THEN** the buffer preset cycles backward or forward, buffer capacity updates immediately, and the new value is persisted
-
-#### Scenario: Adjust theme with horizontal keys
-
-- **WHEN** the Settings modal is open, theme is focused, and the user presses Left or Right
-- **THEN** the theme preference cycles backward or forward, the active theme updates immediately, and the new value is persisted
 
 #### Scenario: Adjust language with horizontal keys
 
@@ -287,7 +282,7 @@ The Settings modal SHALL use vertical arrow keys to move focus among visible set
 #### Scenario: Focus re-anchors when Custom row hides
 
 - **WHEN** the Settings modal is open, Custom capacity is focused, and the user cycles preset away from Custom
-- **THEN** focus moves to an adjacent visible row (preset, theme, or language) and the Custom row is no longer focused
+- **THEN** focus moves to an adjacent visible row (preset or language) and the Custom row is no longer focused
 
 #### Scenario: Help line documents controls
 
@@ -306,7 +301,7 @@ The system SHALL present Settings, export path entry, and Tag/Message filter edi
 #### Scenario: Open settings modal
 
 - **WHEN** the user opens Settings from the toolbar or shortcut
-- **THEN** a modal panel shows adb path, buffer configuration, theme, and language controls editable in the terminal with keyboard navigation help visible at the top
+- **THEN** a modal panel shows adb path, buffer configuration, and language controls editable in the terminal with keyboard navigation help visible at the top
 
 #### Scenario: Open tag filter modal from filter row
 
@@ -315,7 +310,7 @@ The system SHALL present Settings, export path entry, and Tag/Message filter edi
 
 ### Requirement: Language field in Settings modal
 
-The Settings modal SHALL include a Language row that cycles through Auto, English, Simplified Chinese, and Traditional Chinese using the same horizontal-key adjust pattern as Theme. Option labels for the Language row SHALL be fixed as `Auto`, `English`, `简体中文`, and `繁體中文` regardless of the currently active UI locale.
+The Settings modal SHALL include a Language row that cycles through Auto, English, Simplified Chinese, and Traditional Chinese using the same horizontal-key adjust pattern as other cycle-type settings rows. Option labels for the Language row SHALL be fixed as `Auto`, `English`, `简体中文`, and `繁體中文` regardless of the currently active UI locale.
 
 #### Scenario: Adjust language with horizontal keys
 

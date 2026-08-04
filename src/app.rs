@@ -10,7 +10,7 @@ use crate::ui::{
     clamp_log_pos, expand_line, expand_word, format_log_line, line_spans, log_pos_to_screen,
     mouse_to_log_pos, reset_pointer_shape, set_pointer_shape, step_caret_horizontal,
     str_display_width, visible_chars, wrap_line_count, FindState, LanguagePreference, Locale,
-    LogPos, PointerShape, TextInput, TextSelection, Theme, ThemePreference, UiStrings,
+    LogPos, PointerShape, TextInput, TextSelection, Theme, UiStrings,
     ViewportMap, WrapChunks, TEXT_INPUT_CURSOR_STYLE,
 };
 use crossterm::cursor::SetCursorStyle;
@@ -64,7 +64,6 @@ enum SettingsField {
     Adb,
     Preset,
     Custom,
-    Theme,
     Language,
 }
 
@@ -75,7 +74,6 @@ pub struct SettingsPanelState {
     auto_adb: Option<String>,
     pub preset: BufferPreset,
     pub custom_capacity: String,
-    pub theme: ThemePreference,
     pub language: LanguagePreference,
     pub status: Option<String>,
     focus_field: SettingsField,
@@ -90,7 +88,6 @@ impl SettingsPanelState {
             auto_adb: adb::resolve_adb_path(None).ok(),
             preset,
             custom_capacity: settings.buffer_capacity.to_string(),
-            theme: settings.theme,
             language: settings.language,
             status: None,
             focus_field: SettingsField::Adb,
@@ -98,17 +95,15 @@ impl SettingsPanelState {
     }
 
     fn visible_fields(preset: BufferPreset) -> &'static [SettingsField] {
-        static WITH_CUSTOM: [SettingsField; 5] = [
+        static WITH_CUSTOM: [SettingsField; 4] = [
             SettingsField::Adb,
             SettingsField::Preset,
             SettingsField::Custom,
-            SettingsField::Theme,
             SettingsField::Language,
         ];
-        static WITHOUT_CUSTOM: [SettingsField; 4] = [
+        static WITHOUT_CUSTOM: [SettingsField; 3] = [
             SettingsField::Adb,
             SettingsField::Preset,
-            SettingsField::Theme,
             SettingsField::Language,
         ];
         if preset == BufferPreset::Custom {
@@ -226,7 +221,7 @@ impl OhmylogcatApp {
     pub fn new(keyboard_enhancement: bool) -> Self {
         let rt = Runtime::new().expect("tokio runtime");
         let settings = load_settings();
-        let theme = Theme::resolve(settings.theme);
+        let theme = Theme::accents();
         let locale = Locale::resolve(settings.language);
         let ui = UiStrings::for_locale(locale);
         let (engine, event_rx) = Engine::new(settings.buffer_capacity);
@@ -629,12 +624,6 @@ impl OhmylogcatApp {
                 self.cycle_preset(forward);
             }
             KeyCode::Left | KeyCode::Right
-                if self.settings_panel.focus_field == SettingsField::Theme =>
-            {
-                let forward = key.code == KeyCode::Right;
-                self.cycle_theme(forward);
-            }
-            KeyCode::Left | KeyCode::Right
                 if self.settings_panel.focus_field == SettingsField::Language =>
             {
                 let forward = key.code == KeyCode::Right;
@@ -657,7 +646,7 @@ impl OhmylogcatApp {
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !matches!(
                         self.settings_panel.focus_field,
-                        SettingsField::Preset | SettingsField::Theme | SettingsField::Language
+                        SettingsField::Preset | SettingsField::Language
                     ) =>
             {
                 match self.settings_panel.focus_field {
@@ -1633,13 +1622,9 @@ impl OhmylogcatApp {
             self.settings_panel.custom_capacity = cap.to_string();
         }
         if was_custom_focus && self.settings_panel.preset != BufferPreset::Custom {
+            // Custom sits between Preset and Language; re-anchor to Preset.
             self.settings_panel.focus_field = SettingsField::Preset;
         }
-        self.commit_settings_from_panel();
-    }
-
-    fn cycle_theme(&mut self, forward: bool) {
-        self.settings_panel.theme = self.settings_panel.theme.cycle(forward);
         self.commit_settings_from_panel();
     }
 
@@ -1658,16 +1643,13 @@ impl OhmylogcatApp {
             buffer_capacity: self.settings_panel.capacity(),
             auto_scroll_to_end: self.auto_scroll,
             soft_wrap: self.soft_wrap,
-            theme: self.settings_panel.theme,
             language: self.settings_panel.language,
         };
         match save_settings(&settings) {
             Ok(()) => {
                 self.settings.adb_path = settings.adb_path.clone();
                 self.settings.buffer_capacity = settings.buffer_capacity;
-                self.settings.theme = settings.theme;
                 self.settings.language = settings.language;
-                self.theme = Theme::resolve(settings.theme);
                 self.locale = Locale::resolve(settings.language);
                 self.ui = UiStrings::for_locale(self.locale);
                 self.engine.set_capacity(settings.buffer_capacity);
@@ -1873,18 +1855,14 @@ impl OhmylogcatApp {
             self.hit_map.toolbar.push((rect, *hit));
             spans.push(Span::styled(
                 label.clone(),
-                Style::default()
-                    .fg(self.theme.shell_fg)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().add_modifier(Modifier::BOLD),
             ));
             x = x.saturating_add(width);
         }
         spans.push(Span::raw(" │ "));
         spans.push(Span::styled(
             format!("[q]{}", ui.toolbar_quit),
-            Style::default()
-                .fg(self.theme.shell_fg)
-                .add_modifier(Modifier::BOLD),
+            Style::default().add_modifier(Modifier::BOLD),
         ));
 
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -1892,10 +1870,7 @@ impl OhmylogcatApp {
 
     fn draw_separator(&self, frame: &mut Frame, area: Rect) {
         let line = "─".repeat(area.width as usize);
-        frame.render_widget(
-            Paragraph::new(line).style(Style::default().fg(self.theme.shell_divider)),
-            area,
-        );
+        frame.render_widget(Paragraph::new(line), area);
     }
 
     fn draw_filters(&mut self, frame: &mut Frame, area: Rect) {
@@ -1905,10 +1880,8 @@ impl OhmylogcatApp {
             .unwrap_or("Verbose");
         let ui = self.ui;
 
-        let summary_style = Style::default().fg(self.theme.shell_fg);
-        let shortcut_style = Style::default()
-            .fg(self.theme.shell_fg)
-            .add_modifier(Modifier::BOLD);
+        let summary_style = Style::default();
+        let shortcut_style = Style::default().add_modifier(Modifier::BOLD);
         let level_style = field_style(self.focus == Focus::Level, &self.theme);
 
         let tag_value = truncate_input(&self.filter_tag.text, 16);
@@ -2010,10 +1983,7 @@ impl OhmylogcatApp {
         let mut items: Vec<ListItem> = Vec::new();
 
         if row_count == 0 {
-            items.push(ListItem::new(Span::styled(
-                self.ui.empty_logs,
-                Style::default().fg(self.theme.shell_hint),
-            )));
+            items.push(ListItem::new(Span::raw(self.ui.empty_logs)));
             frame.render_widget(List::new(items), area);
             return;
         }
@@ -2132,10 +2102,7 @@ impl OhmylogcatApp {
             wrap_hint,
             err
         );
-        frame.render_widget(
-            Paragraph::new(text).style(Style::default().fg(self.theme.shell_muted)),
-            area,
-        );
+        frame.render_widget(Paragraph::new(text), area);
     }
 
     fn draw_modal(&mut self, frame: &mut Frame, area: Rect) {
@@ -2239,12 +2206,6 @@ impl OhmylogcatApp {
                             ui.settings_custom,
                             self.settings_panel.custom_capacity
                         ))),
-                        SettingsField::Theme => lines.push(Line::from(format!(
-                            "{} {}: {}",
-                            mark(field),
-                            ui.settings_theme,
-                            self.settings_panel.theme.label()
-                        ))),
                         SettingsField::Language => lines.push(Line::from(format!(
                             "{} {}: {}",
                             mark(field),
@@ -2333,7 +2294,7 @@ fn field_style(focused: bool, theme: &Theme) -> Style {
             .bg(theme.focus_bg)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(theme.shell_fg)
+        Style::default()
     }
 }
 

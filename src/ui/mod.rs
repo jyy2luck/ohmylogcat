@@ -17,4 +17,4 @@ pub use selection::{
     step_caret_horizontal, LogPos, TextSelection, ViewportMap,
 };
 pub use text_input::{str_display_width, TextInput, TEXT_INPUT_CURSOR_STYLE};
-pub use theme::{Theme, ThemePreference};
+pub use theme::Theme;

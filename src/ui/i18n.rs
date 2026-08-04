@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Persisted language preference (mirrors ThemePreference ergonomics).
+/// Persisted language preference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum LanguagePreference {
     #[default]
@@ -158,7 +158,6 @@ pub struct UiStrings {
     pub settings_adb: &'static str,
     pub settings_preset: &'static str,
     pub settings_custom: &'static str,
-    pub settings_theme: &'static str,
     pub settings_language: &'static str,
     pub settings_using: &'static str,
     pub settings_adb_not_found: &'static str,
@@ -236,7 +235,6 @@ impl UiStrings {
             settings_adb: "ADB",
             settings_preset: "Preset",
             settings_custom: "Custom",
-            settings_theme: "Theme",
             settings_language: "Language",
             settings_using: "  (Using: {})",
             settings_adb_not_found: "  (adb not found)",
@@ -305,7 +303,6 @@ impl UiStrings {
             settings_adb: "ADB",
             settings_preset: "预设",
             settings_custom: "自定义",
-            settings_theme: "主题",
             settings_language: "语言",
             settings_using: "  (使用: {})",
             settings_adb_not_found: "  (未找到 adb)",
@@ -374,7 +371,6 @@ impl UiStrings {
             settings_adb: "ADB",
             settings_preset: "預設",
             settings_custom: "自訂",
-            settings_theme: "主題",
             settings_language: "語言",
             settings_using: "  (使用: {})",
             settings_adb_not_found: "  (找不到 adb)",
