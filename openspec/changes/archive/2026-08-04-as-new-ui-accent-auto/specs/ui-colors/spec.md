@@ -1,24 +1,12 @@
-# ui-colors Specification
+## REMOVED Requirements
 
-## Purpose
+### Requirement: Semantic accents use a fixed palette
 
-Defines how the TUI picks colors: shell chrome follows the host terminal defaults, while log levels and interaction accents use dual Android Studio–aligned RGB palettes chosen by silent host-background detection (dark fallback), with no user-selectable theme mode.
+**Reason**: A single ANSI palette (Info as Gray) is unreadable on light terminals and does not match Android Studio Logcat colors for light vs dark hosts.
 
-## Requirements
+**Migration**: Use the new dual Android Studio–aligned accent palettes with silent background detection (dark fallback).
 
-### Requirement: Shell chrome follows terminal defaults
-
-The system SHALL render main-shell chrome text (toolbar labels, filter-row labels, separators, status text, empty-state hints) without forcing a light or dark foreground palette, so those elements inherit the host terminal's default colors the same way Settings and Tag/Message modals do.
-
-#### Scenario: Shell text readable on dark terminal
-
-- **WHEN** the application runs in a dark-background terminal
-- **THEN** toolbar, filter-row, separator, and status chrome remain readable using the terminal default colors without applying a light-theme forced black foreground
-
-#### Scenario: Shell text readable on light terminal
-
-- **WHEN** the application runs in a light-background terminal
-- **THEN** toolbar, filter-row, separator, and status chrome remain readable using the terminal default colors without applying a dark-theme forced light-gray foreground
+## ADDED Requirements
 
 ### Requirement: Semantic accents use dual Android Studio palettes
 
@@ -58,12 +46,3 @@ The choice SHALL NOT depend on a user theme preference. Shell chrome SHALL conti
 
 - **WHEN** the application selects an accent palette
 - **THEN** the selection does not read or write a user theme preference and Settings still exposes no Theme row
-
-### Requirement: No user-selectable theme mode
-
-The system SHALL NOT expose Auto, Dark, or Light theme modes in Settings or elsewhere in the UI.
-
-#### Scenario: Settings has no theme row
-
-- **WHEN** the user opens the Settings modal
-- **THEN** no Theme preference row is shown and theme cannot be cycled

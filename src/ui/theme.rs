@@ -1,8 +1,10 @@
 use crate::parser::LogLevel;
 use ratatui::style::Color;
 
-/// Fixed semantic accent palette. Shell chrome inherits the terminal default;
+/// Semantic accent palette. Shell chrome inherits the terminal default;
 /// only levels, focus, selection, and find use these colors.
+/// Level colors come from Android Studio / IntelliJ console `LOG_*`;
+/// light vs dark is chosen once at startup via host-background detection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
     pub level_verbose: Color,
@@ -19,14 +21,46 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Single fixed accent palette (named/ANSI colors that follow the host table).
-    pub fn accents() -> Self {
+    /// IntelliJ Default / IntelliJ Light console `LOG_*` colors.
+    pub fn light_accents() -> Self {
         Self {
-            level_verbose: Color::DarkGray,
-            level_debug: Color::Cyan,
-            level_info: Color::Gray,
-            level_warn: Color::Yellow,
-            level_error: Color::Red,
+            level_verbose: rgb(0x00, 0x00, 0xee),
+            level_debug: rgb(0x00, 0xcc, 0xcc),
+            level_info: rgb(0x00, 0xcd, 0x00),
+            level_warn: rgb(0xa6, 0x6f, 0x00),
+            level_error: rgb(0xcd, 0x00, 0x00),
+            ..Self::interaction_accents()
+        }
+    }
+
+    /// Android Studio New UI / Islands Dark console `LOG_*` colors.
+    pub fn dark_accents() -> Self {
+        Self {
+            level_verbose: rgb(0x56, 0xa8, 0xf5),
+            level_debug: rgb(0x29, 0x99, 0x99),
+            level_info: rgb(0xe0, 0xbb, 0x65),
+            level_warn: rgb(0xa6, 0x6f, 0x00),
+            level_error: rgb(0xf7, 0x54, 0x64),
+            ..Self::interaction_accents()
+        }
+    }
+
+    /// Pick light or dark accents from `$COLORFGBG`; dark when unset/unparsable.
+    pub fn resolve() -> Self {
+        if detect_light_background() {
+            Self::light_accents()
+        } else {
+            Self::dark_accents()
+        }
+    }
+
+    fn interaction_accents() -> Self {
+        Self {
+            level_verbose: Color::Reset,
+            level_debug: Color::Reset,
+            level_info: Color::Reset,
+            level_warn: Color::Reset,
+            level_error: Color::Reset,
             focus_fg: Color::Black,
             focus_bg: Color::Yellow,
             selection_fg: Color::White,
@@ -49,8 +83,25 @@ impl Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::accents()
+        Self::resolve()
     }
+}
+
+fn rgb(r: u8, g: u8, b: u8) -> Color {
+    Color::Rgb(r, g, b)
+}
+
+/// Heuristic from `$COLORFGBG` (fg;bg). Light when background index >= 7.
+/// When unset/unparsable, assume dark.
+fn detect_light_background() -> bool {
+    detect_light_background_from(std::env::var("COLORFGBG").ok().as_deref())
+}
+
+fn detect_light_background_from(colorfgbg: Option<&str>) -> bool {
+    if let Some(bg) = colorfgbg.and_then(|value| value.rsplit(';').next()?.parse::<u8>().ok()) {
+        return bg >= 7;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -58,18 +109,69 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accents_are_stable_default() {
-        let theme = Theme::default();
-        assert_eq!(theme, Theme::accents());
-        assert_eq!(theme.level_error, Color::Red);
-        assert_eq!(theme.level_warn, Color::Yellow);
-        assert_ne!(theme.level_error, theme.level_info);
-        assert_ne!(theme.find_bg, theme.selection_bg);
+    fn light_and_dark_level_rgb_match_design() {
+        let light = Theme::light_accents();
+        assert_eq!(light.level_verbose, Color::Rgb(0x00, 0x00, 0xee));
+        assert_eq!(light.level_debug, Color::Rgb(0x00, 0xcc, 0xcc));
+        assert_eq!(light.level_info, Color::Rgb(0x00, 0xcd, 0x00));
+        assert_eq!(light.level_warn, Color::Rgb(0xa6, 0x6f, 0x00));
+        assert_eq!(light.level_error, Color::Rgb(0xcd, 0x00, 0x00));
+
+        let dark = Theme::dark_accents();
+        assert_eq!(dark.level_verbose, Color::Rgb(0x56, 0xa8, 0xf5));
+        assert_eq!(dark.level_debug, Color::Rgb(0x29, 0x99, 0x99));
+        assert_eq!(dark.level_info, Color::Rgb(0xe0, 0xbb, 0x65));
+        assert_eq!(dark.level_warn, Color::Rgb(0xa6, 0x6f, 0x00));
+        assert_eq!(dark.level_error, Color::Rgb(0xf7, 0x54, 0x64));
+
+        assert_ne!(dark.level_info, light.level_info);
+        assert_ne!(dark.level_error, dark.level_info);
+        assert_ne!(light.level_error, light.level_info);
+        assert_eq!(dark.find_bg, light.find_bg);
+        assert_ne!(dark.find_bg, dark.selection_bg);
+    }
+
+    #[test]
+    fn resolve_without_colorfgbg_yields_dark() {
+        if std::env::var("COLORFGBG").is_ok() {
+            // Process env already set; assert the helper path instead.
+            assert!(!detect_light_background_from(None));
+            assert_eq!(
+                if detect_light_background_from(None) {
+                    Theme::light_accents()
+                } else {
+                    Theme::dark_accents()
+                }
+                .level_info,
+                Theme::dark_accents().level_info
+            );
+            return;
+        }
+        let theme = Theme::resolve();
+        assert_eq!(theme.level_info, Theme::dark_accents().level_info);
+        assert_eq!(theme, Theme::dark_accents());
+    }
+
+    #[test]
+    fn light_colorfgbg_selects_light_accents() {
+        assert!(detect_light_background_from(Some("15;15")));
+        assert!(detect_light_background_from(Some("0;7")));
+        assert!(!detect_light_background_from(Some("15;0")));
+        assert!(!detect_light_background_from(Some("not-a-number")));
+        assert!(!detect_light_background_from(None));
+
+        let theme = if detect_light_background_from(Some("15;15")) {
+            Theme::light_accents()
+        } else {
+            Theme::dark_accents()
+        };
+        assert_eq!(theme.level_info, Theme::light_accents().level_info);
+        assert_eq!(theme.level_info, Color::Rgb(0x00, 0xcd, 0x00));
     }
 
     #[test]
     fn level_color_maps_error_and_fatal() {
-        let theme = Theme::accents();
+        let theme = Theme::dark_accents();
         assert_eq!(theme.level_color(LogLevel::Error), theme.level_error);
         assert_eq!(theme.level_color(LogLevel::Fatal), theme.level_error);
         assert_eq!(theme.level_color(LogLevel::Info), theme.level_info);

@@ -221,7 +221,7 @@ impl OhmylogcatApp {
     pub fn new(keyboard_enhancement: bool) -> Self {
         let rt = Runtime::new().expect("tokio runtime");
         let settings = load_settings();
-        let theme = Theme::accents();
+        let theme = Theme::resolve();
         let locale = Locale::resolve(settings.language);
         let ui = UiStrings::for_locale(locale);
         let (engine, event_rx) = Engine::new(settings.buffer_capacity);
