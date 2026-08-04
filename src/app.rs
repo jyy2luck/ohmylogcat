@@ -77,6 +77,7 @@ pub struct SettingsPanelState {
     pub language: LanguagePreference,
     pub status: Option<String>,
     focus_field: SettingsField,
+    adb_editing: bool,
 }
 
 impl SettingsPanelState {
@@ -91,6 +92,7 @@ impl SettingsPanelState {
             language: settings.language,
             status: None,
             focus_field: SettingsField::Adb,
+            adb_editing: false,
         }
     }
 
@@ -125,7 +127,26 @@ impl SettingsPanelState {
             .unwrap_or(0);
         let len = fields.len() as isize;
         let next = (idx as isize + delta).rem_euclid(len) as usize;
-        self.focus_field = fields[next];
+        let next_field = fields[next];
+        if self.focus_field == SettingsField::Adb && next_field != SettingsField::Adb {
+            self.adb_editing = false;
+        }
+        self.focus_field = next_field;
+    }
+
+    fn adb_is_custom(&self) -> bool {
+        !self.adb_path.trim().is_empty()
+    }
+
+    fn adb_display_path(&self) -> String {
+        if self.adb_is_custom() {
+            self.adb_path.clone()
+        } else {
+            match &self.auto_adb {
+                Some(path) => path.clone(),
+                None => String::new(),
+            }
+        }
     }
 
     pub fn capacity(&self) -> usize {
@@ -614,7 +635,16 @@ impl OhmylogcatApp {
 
     fn handle_settings_modal_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Esc | KeyCode::Enter => self.close_modal(),
+            KeyCode::Enter => self.close_modal(),
+            KeyCode::Esc => {
+                if self.settings_panel.focus_field == SettingsField::Adb
+                    && self.settings_panel.adb_editing
+                {
+                    self.settings_panel.adb_editing = false;
+                } else {
+                    self.close_modal();
+                }
+            }
             KeyCode::Up => self.settings_panel.move_focus(-1),
             KeyCode::Down => self.settings_panel.move_focus(1),
             KeyCode::Left | KeyCode::Right
@@ -631,7 +661,7 @@ impl OhmylogcatApp {
             }
             KeyCode::Backspace => {
                 match self.settings_panel.focus_field {
-                    SettingsField::Adb => {
+                    SettingsField::Adb if self.settings_panel.adb_editing => {
                         self.settings_panel.adb_path.pop();
                         self.commit_settings_from_panel();
                     }
@@ -651,8 +681,15 @@ impl OhmylogcatApp {
             {
                 match self.settings_panel.focus_field {
                     SettingsField::Adb => {
-                        self.settings_panel.adb_path.push(c);
-                        self.commit_settings_from_panel();
+                        if self.settings_panel.adb_editing {
+                            self.settings_panel.adb_path.push(c);
+                            self.commit_settings_from_panel();
+                        } else if c == 'e' {
+                            self.settings_panel.adb_editing = true;
+                        } else if c == 'r' {
+                            self.settings_panel.adb_path.clear();
+                            self.commit_settings_from_panel();
+                        }
                     }
                     SettingsField::Custom => {
                         if c.is_ascii_digit() {
@@ -2180,18 +2217,35 @@ impl OhmylogcatApp {
                 for &field in SettingsPanelState::visible_fields(self.settings_panel.preset) {
                     match field {
                         SettingsField::Adb => {
-                            lines.push(Line::from(format!(
-                                "{} {}: [{}]",
-                                mark(field),
-                                ui.settings_adb,
-                                self.settings_panel.adb_path
-                            )));
-                            if self.settings_panel.adb_path.trim().is_empty() {
-                                let hint = match &self.settings_panel.auto_adb {
-                                    Some(path) => ui.settings_using.replace("{}", path),
-                                    None => ui.settings_adb_not_found.into(),
+                            let mode = if self.settings_panel.adb_is_custom() {
+                                ui.settings_adb_custom
+                            } else {
+                                ui.settings_adb_auto
+                            };
+                            if self.settings_panel.adb_editing {
+                                lines.push(Line::from(format!(
+                                    "{} {}: [{}]",
+                                    mark(field),
+                                    ui.settings_adb,
+                                    self.settings_panel.adb_path
+                                )));
+                            } else {
+                                let path = self.settings_panel.adb_display_path();
+                                let path_display = if path.is_empty() {
+                                    ui.settings_adb_not_found.trim().to_string()
+                                } else {
+                                    path
                                 };
-                                lines.push(Line::from(hint));
+                                lines.push(Line::from(format!(
+                                    "{} {}: {} [{}]",
+                                    mark(field),
+                                    ui.settings_adb,
+                                    path_display,
+                                    mode
+                                )));
+                                if focus == SettingsField::Adb {
+                                    lines.push(Line::from(ui.settings_adb_locked_hint));
+                                }
                             }
                         }
                         SettingsField::Preset => lines.push(Line::from(format!(

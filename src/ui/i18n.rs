@@ -156,10 +156,12 @@ pub struct UiStrings {
     pub modal_settings_title: &'static str,
     pub modal_settings_help: &'static str,
     pub settings_adb: &'static str,
+    pub settings_adb_auto: &'static str,
+    pub settings_adb_custom: &'static str,
+    pub settings_adb_locked_hint: &'static str,
     pub settings_preset: &'static str,
     pub settings_custom: &'static str,
     pub settings_language: &'static str,
-    pub settings_using: &'static str,
     pub settings_adb_not_found: &'static str,
 
     // Filter edit modal
@@ -219,31 +221,33 @@ impl UiStrings {
                 "Tip: keyboard enhancement unavailable — use Windows Terminal for full key support",
 
             modal_devices_title: " Devices ",
-            modal_devices_help: "Select device  (↑↓ · Enter · r refresh · Esc)",
+            modal_devices_help: "Select device  (↑↓ · enter · r refresh · esc exit)",
 
             modal_export_title: " Export ",
-            modal_export_filtered: "[1]/f] Export filtered",
-            modal_export_all: "[2]/a] Export all",
-            modal_export_cancel: "Esc cancel",
-            modal_export_path_prompt: "Path (Enter confirm · Esc cancel):",
-            modal_export_filtered_title: " Export filtered ",
-            modal_export_all_title: " Export all ",
+            modal_export_filtered: "[1]/f] export filtered",
+            modal_export_all: "[2]/a] export all",
+            modal_export_cancel: "esc cancel",
+            modal_export_path_prompt: "Path (enter confirm · esc cancel):",
+            modal_export_filtered_title: " export filtered ",
+            modal_export_all_title: " export all ",
 
             modal_settings_title: " Settings ",
             modal_settings_help:
-                "↑/↓ move · ←/→ adjust · Applies immediately · Enter/Esc dismiss",
+                "↑/↓ move · ←/→ adjust · ADB: e edit · r restore · esc exit edit/dismiss · Custom: type digits · enter dismiss",
             settings_adb: "ADB",
+            settings_adb_auto: "Auto",
+            settings_adb_custom: "Custom",
+            settings_adb_locked_hint: "  (e edit · r restore)",
             settings_preset: "Preset",
             settings_custom: "Custom",
             settings_language: "Language",
-            settings_using: "  (Using: {})",
             settings_adb_not_found: "  (adb not found)",
 
             modal_tag_filter_title: " Tag filter ",
             modal_message_filter_title: " Message filter ",
             filter_tag_contains: "Tag contains:",
             filter_message_contains: "Message contains:",
-            filter_live_hint: "Live filter · Esc clear/close · Enter done",
+            filter_live_hint: "Live filter · esc clear/close · enter done",
         }
     }
 
@@ -299,12 +303,14 @@ impl UiStrings {
 
             modal_settings_title: " 设置 ",
             modal_settings_help:
-                "↑/↓ 移动 · ←/→ 调整 · 即时生效 · Enter/Esc 关闭",
+                "↑/↓ 移动 · ←/→ 调整 · ADB: e 编辑 · r 自动 · Esc 退出编辑/关闭 · 自定义: 输入数字 · Enter 关闭",
             settings_adb: "ADB",
+            settings_adb_auto: "自动",
+            settings_adb_custom: "自定义",
+            settings_adb_locked_hint: "  (e 编辑 · r 恢复自动)",
             settings_preset: "预设",
             settings_custom: "自定义",
             settings_language: "语言",
-            settings_using: "  (使用: {})",
             settings_adb_not_found: "  (未找到 adb)",
 
             modal_tag_filter_title: " 标签筛选 ",
@@ -367,12 +373,14 @@ impl UiStrings {
 
             modal_settings_title: " 設定 ",
             modal_settings_help:
-                "↑/↓ 移動 · ←/→ 調整 · 即時生效 · Enter/Esc 關閉",
+                "↑/↓ 移動 · ←/→ 調整 · ADB: e 編輯 · r 自動 · Esc 退出編輯/關閉 · 自訂: 輸入數字 · Enter 關閉",
             settings_adb: "ADB",
+            settings_adb_auto: "自動",
+            settings_adb_custom: "自訂",
+            settings_adb_locked_hint: "  (e 編輯 · r 恢復自動)",
             settings_preset: "預設",
             settings_custom: "自訂",
             settings_language: "語言",
-            settings_using: "  (使用: {})",
             settings_adb_not_found: "  (找不到 adb)",
 
             modal_tag_filter_title: " 標籤篩選 ",

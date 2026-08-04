@@ -1,46 +1,4 @@
-# app-settings Specification
-
-## Purpose
-TBD - created by archiving change mvp-logcat-viewer. Update Purpose after archive.
-
-## Requirements
-
-### Requirement: Configure adb executable path
-
-The system SHALL allow the user to set the absolute path to the adb executable and persist it across sessions.
-
-#### Scenario: Custom adb path on Windows
-
-- **WHEN** the user sets adb path to `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`
-- **THEN** subsequent device discovery and log streaming use that executable
-
-#### Scenario: Default adb path
-
-- **WHEN** no custom adb path is configured
-- **THEN** the system attempts to use `adb` from PATH, with platform-specific common SDK locations as fallback hints only
-
-### Requirement: Persist buffer preset
-
-The system SHALL persist the selected buffer preset or custom line count and restore it on next launch.
-
-#### Scenario: Settings persist after restart
-
-- **WHEN** the user changes buffer preset to Heavy and restarts the application
-- **THEN** the buffer capacity remains 500,000 lines
-
-### Requirement: Persist language preference
-
-The system SHALL persist the selected language preference (Auto, English, Simplified Chinese, or Traditional Chinese) in settings storage and restore it on the next launch. Missing language fields in existing settings files SHALL default to Auto.
-
-#### Scenario: Language preference persists after restart
-
-- **WHEN** the user sets language to Simplified Chinese, saves settings, and restarts the application
-- **THEN** the language preference remains Simplified Chinese
-
-#### Scenario: Missing language field defaults to Auto
-
-- **WHEN** settings are loaded from a file that has no language field
-- **THEN** the language preference is Auto
+## MODIFIED Requirements
 
 ### Requirement: Settings accessible from UI
 
@@ -75,6 +33,8 @@ When the Settings modal is open, the system SHALL persist each settings field to
 - **WHEN** the user adjusts one or more settings fields and presses Esc or Enter to close the Settings modal
 - **THEN** all changes made during the session remain persisted and are restored on next launch
 
+## ADDED Requirements
+
 ### Requirement: Guarded ADB path editing
 
 The system SHALL keep the ADB path setting locked against direct typing by default. While locked and focused, printable character input and Backspace SHALL NOT modify the path. The user SHALL unlock editing with an explicit edit action before typing is accepted. While unlocked, append-only typing and Backspace SHALL modify the path and persist as for other text settings. Exiting edit mode SHALL keep the current path value and SHALL NOT dismiss the Settings modal.
@@ -107,12 +67,3 @@ The system SHALL allow the user to clear a custom adb path and return to automat
 
 - **WHEN** the Settings modal is open, ADB path is focused and locked, no custom path is stored, and the user restores Auto
 - **THEN** the path remains Auto and settings storage stays unchanged
-
-### Requirement: Ignore legacy theme field
-
-When loading settings, the system SHALL ignore a legacy `theme` field if present and SHALL NOT write a `theme` field on subsequent saves.
-
-#### Scenario: Old settings file with theme loads
-
-- **WHEN** settings are loaded from a file that still contains a `theme` value
-- **THEN** the application starts successfully without exposing a theme preference, and the next save omits `theme`
