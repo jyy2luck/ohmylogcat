@@ -1,6 +1,7 @@
 mod adb;
 mod app;
 mod buffer;
+mod cli;
 mod engine;
 mod filter;
 mod parser;
@@ -22,12 +23,27 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::{self, stdout};
 use std::panic;
+use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 static KEYBOARD_ENHANCEMENT_ENABLED: AtomicBool = AtomicBool::new(false);
 
 fn main() -> io::Result<()> {
+    match cli::parse(std::env::args().skip(1)) {
+        Ok(cli::CliAction::RunTui) => run_tui(),
+        Ok(action) => match cli::run(action) {
+            Ok(()) => Ok(()),
+            Err(code) => process::exit(code),
+        },
+        Err(err) => {
+            eprintln!("{}", err.message);
+            process::exit(2);
+        }
+    }
+}
+
+fn run_tui() -> io::Result<()> {
     install_panic_hook();
 
     enable_raw_mode()?;

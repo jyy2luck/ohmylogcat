@@ -54,6 +54,21 @@ cargo install --git https://github.com/jyy2luck/ohmylogcat
 # or: clone, then cargo build --release
 ```
 
+### Lifecycle commands (Release installs)
+
+After installing via the scripts above:
+
+```bash
+ohmylogcat --version    # package version (-V)
+ohmylogcat --help       # usage + common shortcuts (-h)
+ohmylogcat update       # re-run the platform install script (latest Release)
+ohmylogcat uninstall    # remove the Release binary (asks about settings)
+```
+
+Useful uninstall flags: `--yes` / `-y` (skip confirm), `--keep-data` (keep `settings.json`), `--purge` (delete settings).
+
+`update` / `uninstall` detect a Release-script install path (`~/.local/bin` or `%LOCALAPPDATA%\ohmylogcat`, or `$INSTALL_DIR`). Cargo installs should use `cargo install --force` / `cargo uninstall ohmylogcat` instead.
+
 ## Prerequisites
 
 - **Android SDK platform-tools** (`adb`) — on PATH or configured in Settings
@@ -77,6 +92,10 @@ Set a custom path in Settings if adb is elsewhere.
 ```bash
 # Development (run inside a real terminal)
 cargo run
+
+# Lifecycle commands without the TUI
+cargo run -- --version
+cargo run -- --help
 
 # Release binary
 cargo build --release
