@@ -1,6 +1,7 @@
 //! Mouse text selection and caret geometry in the log viewport.
 
-use crate::ui::display::WrapChunks;
+use crate::ui::display::{effective_hang_indent, WrapChunks};
+use crate::ui::format::message_column_indent_line;
 use crate::ui::Theme;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -191,18 +192,31 @@ fn mouse_to_log_pos_wrapped(
 
     while idx < row_count {
         let line = line_at(idx)?;
-        for (ci, chunk) in WrapChunks::new(&line, width).enumerate() {
+        let indent = message_column_indent_line(&line);
+        let hang = effective_hang_indent(indent, width);
+        for (chunk_start, chunk) in WrapChunks::with_indent(&line, width, indent) {
             if skip > 0 {
                 skip -= 1;
                 continue;
             }
             if display_row == target_display {
-                let chunk_start = ci * width;
                 let chunk_len = chunk.chars().count();
+                let is_continuation = chunk_start > 0 && hang > 0;
+                if is_continuation && col_in < hang {
+                    return Some(LogPos {
+                        row: idx,
+                        col: chunk_start,
+                    });
+                }
+                let content_col = if is_continuation {
+                    col_in.saturating_sub(hang)
+                } else {
+                    col_in
+                };
                 if chunk_len == 0 {
                     return Some(LogPos { row: idx, col: chunk_start });
                 }
-                let col_in_chunk = col_in.min(chunk_len - 1);
+                let col_in_chunk = content_col.min(chunk_len - 1);
                 return Some(LogPos {
                     row: idx,
                     col: chunk_start + col_in_chunk,
@@ -294,17 +308,24 @@ fn log_pos_to_screen_wrapped(
             idx += 1;
             continue;
         }
-        for (ci, chunk) in WrapChunks::new(&line, width).enumerate() {
+        let indent = message_column_indent_line(&line);
+        let hang = effective_hang_indent(indent, width);
+        for (chunk_start, chunk) in WrapChunks::with_indent(&line, width, indent) {
             if skip > 0 {
                 skip -= 1;
                 continue;
             }
-            let chunk_start = ci * width;
             let chunk_chars = chunk.chars().count();
             let chunk_end = chunk_start + chunk_chars.saturating_sub(1);
             if idx == pos.row && pos.col >= chunk_start && pos.col <= chunk_end {
+                let is_continuation = chunk_start > 0 && hang > 0;
                 let col_in = (pos.col - chunk_start).min(chunk_chars.saturating_sub(1));
-                let x = map.area.x.saturating_add(col_in as u16);
+                let screen_x_offset = if is_continuation {
+                    hang + col_in
+                } else {
+                    col_in
+                };
+                let x = map.area.x.saturating_add(screen_x_offset as u16);
                 let y = map.area.y.saturating_add(display_row as u16);
                 return Some((x, y));
             }
@@ -407,10 +428,14 @@ pub fn step_caret_horizontal(
 }
 
 /// Build styled spans for a text segment with selection and optional find highlights.
+///
+/// `display_pad` is the number of leading display-only characters in `text` (e.g. hang-indent
+/// spaces on soft-wrap continuation rows). They are not part of the logical line indices.
 pub fn line_spans(
     text: &str,
     log_row: usize,
     line_char_start: usize,
+    display_pad: usize,
     base_color: Color,
     theme: &Theme,
     selection: &TextSelection,
@@ -429,6 +454,7 @@ pub fn line_spans(
     }
 
     let chars: Vec<char> = text.chars().collect();
+    let logical_len = chars.len().saturating_sub(display_pad);
     let lower: Vec<char> = if find_q.is_empty() {
         Vec::new()
     } else {
@@ -439,15 +465,26 @@ pub fn line_spans(
     let mut spans = Vec::new();
     let mut i = 0usize;
     while i < chars.len() {
-        let abs_col = line_char_start + i;
-        let selected = selection.contains(log_row, abs_col);
+        let selected = is_display_selected(
+            &selection,
+            log_row,
+            line_char_start,
+            display_pad,
+            logical_len,
+            i,
+        );
 
-        // Find match at this position
-        if !find_q.is_empty() && i + q.len() <= chars.len() && lower[i..i + q.len()] == q[..] {
+        // Find match at this position (logical text only, skip display pad)
+        if !find_q.is_empty()
+            && i >= display_pad
+            && i + q.len() <= chars.len()
+            && lower[i..i + q.len()] == q[..]
+        {
             let matched: String = chars[i..i + q.len()].iter().collect();
+            let logical_i = i - display_pad;
             let mut any_selected = false;
             for k in 0..q.len() {
-                if selection.contains(log_row, abs_col + k) {
+                if selection.contains(log_row, line_char_start + logical_i + k) {
                     any_selected = true;
                     break;
                 }
@@ -463,12 +500,22 @@ pub fn line_spans(
         // Coalesce run with same (find-current, selected) flags
         let mut j = i + 1;
         while j < chars.len() {
-            let abs_j = line_char_start + j;
-            let sel_j = selection.contains(log_row, abs_j);
+            let sel_j = is_display_selected(
+                &selection,
+                log_row,
+                line_char_start,
+                display_pad,
+                logical_len,
+                j,
+            );
             if sel_j != selected {
                 break;
             }
-            if !find_q.is_empty() && j + q.len() <= chars.len() && lower[j..j + q.len()] == q[..] {
+            if !find_q.is_empty()
+                && j >= display_pad
+                && j + q.len() <= chars.len()
+                && lower[j..j + q.len()] == q[..]
+            {
                 break;
             }
             j += 1;
@@ -488,6 +535,24 @@ pub fn line_spans(
         ));
     }
     spans
+}
+
+fn is_display_selected(
+    selection: &TextSelection,
+    log_row: usize,
+    line_char_start: usize,
+    display_pad: usize,
+    logical_len: usize,
+    display_i: usize,
+) -> bool {
+    if display_i < display_pad {
+        if logical_len == 0 {
+            return selection.contains(log_row, line_char_start);
+        }
+        (line_char_start..line_char_start + logical_len).any(|c| selection.contains(log_row, c))
+    } else {
+        selection.contains(log_row, line_char_start + (display_i - display_pad))
+    }
 }
 
 fn find_style(theme: &Theme, is_current: bool, selected: bool) -> Style {
@@ -550,6 +615,53 @@ mod tests {
             viewport_width: 10,
             viewport_height: 5,
         }
+    }
+
+    #[test]
+    fn line_spans_hang_indent_selection_includes_pad() {
+        let theme = Theme::dark_accents();
+        let mut sel = TextSelection::default();
+        sel.start(LogPos { row: 0, col: 10 });
+        sel.extend_to(LogPos { row: 0, col: 12 });
+
+        let spans = line_spans(
+            "   abc",
+            0,
+            10,
+            3,
+            Color::White,
+            &theme,
+            &sel,
+            "",
+            false,
+        );
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].style.bg, Some(theme.selection_bg));
+        assert_eq!(spans[0].content, "   abc");
+    }
+
+    #[test]
+    fn line_spans_hang_indent_pad_not_selected_before_chunk() {
+        let theme = Theme::dark_accents();
+        let mut sel = TextSelection::default();
+        sel.start(LogPos { row: 0, col: 5 });
+        sel.extend_to(LogPos { row: 0, col: 8 });
+
+        let spans = line_spans(
+            "   abc",
+            0,
+            10,
+            3,
+            Color::White,
+            &theme,
+            &sel,
+            "",
+            false,
+        );
+
+        assert_eq!(spans.len(), 1);
+        assert_ne!(spans[0].style.bg, Some(theme.selection_bg));
     }
 
     #[test]
@@ -630,6 +742,21 @@ mod tests {
             log_pos_to_screen(LogPos { row: 0, col: 0 }, &m_skip, lines(&rows), 1),
             None
         );
+    }
+
+    #[test]
+    fn log_pos_to_screen_wrapped_hang_indent() {
+        // "01234: 5678901234abcd" — indent 7 (message starts at col 7)
+        let rows = ["01234: 5678901234abcd"];
+        let m = map(true, 0, 0, 0);
+        // col 12 is on continuation row (logical start 10), screen x = hang(7) + 2
+        assert_eq!(
+            log_pos_to_screen(LogPos { row: 0, col: 12 }, &m, lines(&rows), 1),
+            Some((2 + 7 + 2, 3 + 1))
+        );
+        // click in pad maps to chunk start
+        let pos = mouse_to_log_pos(2 + 3, 3 + 1, &m, lines(&rows), 1).unwrap();
+        assert_eq!(pos, LogPos { row: 0, col: 10 });
     }
 
     #[test]

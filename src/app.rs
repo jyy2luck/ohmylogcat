@@ -8,10 +8,12 @@ use crate::settings::{
 };
 use crate::ui::{
     clamp_log_pos, expand_line, expand_word, format_log_line, line_spans, log_pos_to_screen,
-    mouse_to_log_pos, reset_pointer_shape, set_pointer_shape, step_caret_horizontal,
-    str_display_width, visible_chars, wrap_line_count, FindState, LanguagePreference, Locale,
-    LogPos, PointerShape, TextInput, TextSelection, Theme, UiStrings,
-    ViewportMap, WrapChunks, TEXT_INPUT_CURSOR_STYLE,
+    message_column_indent, mouse_to_log_pos, reset_pointer_shape, set_pointer_shape,
+    step_caret_horizontal, str_display_width, visible_chars, effective_hang_indent,
+    wrap_chunk_at_col, wrap_display_col, wrap_display_row_for_col,
+    wrap_display_text, wrap_line_count, wrap_logical_col_from_display,
+    FindState, LanguagePreference, Locale, LogPos, PointerShape, TextInput, TextSelection, Theme,
+    UiStrings, ViewportMap, WrapChunks, TEXT_INPUT_CURSOR_STYLE,
 };
 use crossterm::cursor::SetCursorStyle;
 use crossterm::execute;
@@ -1119,7 +1121,10 @@ impl OhmylogcatApp {
 
     fn display_col_of(&self, pos: LogPos) -> usize {
         if self.soft_wrap {
-            pos.col % self.viewport_width.max(1)
+            let line = self.formatted_line_at(pos.row).unwrap_or_default();
+            let width = self.viewport_width.max(1);
+            let indent = self.entry_indent_at(pos.row);
+            wrap_display_col(&line, width, indent, pos.col)
         } else {
             pos.col
         }
@@ -1229,7 +1234,9 @@ impl OhmylogcatApp {
         }
         let width = self.viewport_width.max(1);
         let mut row = old.row;
-        let mut chunk = old.col / width;
+        let line = self.formatted_line_at(row).unwrap_or_default();
+        let indent = self.entry_indent_at(row);
+        let (mut chunk, _, _) = wrap_chunk_at_col(&line, width, indent, old.col);
         if delta_rows < 0 {
             let mut left = (-delta_rows) as usize;
             while left > 0 {
@@ -1265,9 +1272,9 @@ impl OhmylogcatApp {
         let col = if line_len == 0 {
             0
         } else {
-            let chunk_start = chunk * width;
-            let max_in_chunk = (line_len - chunk_start).min(width).saturating_sub(1);
-            chunk_start + preferred.min(max_in_chunk)
+            let line = self.formatted_line_at(row).unwrap_or_default();
+            let indent = self.entry_indent_at(row);
+            wrap_logical_col_from_display(&line, width, indent, chunk, preferred)
         };
         LogPos { row, col }
     }
@@ -1287,7 +1294,9 @@ impl OhmylogcatApp {
             if self.soft_wrap {
                 let width = self.viewport_width.max(1);
                 self.scroll_offset = caret.row;
-                self.wrap_skip = caret.col / width;
+                let line = self.formatted_line_at(caret.row).unwrap_or_default();
+                let indent = self.entry_indent_at(caret.row);
+                self.wrap_skip = wrap_display_row_for_col(&line, width, indent, caret.col);
             } else {
                 self.scroll_offset = caret.row;
             }
@@ -1296,7 +1305,9 @@ impl OhmylogcatApp {
             if self.soft_wrap {
                 let width = self.viewport_width.max(1);
                 self.scroll_offset = caret.row;
-                self.wrap_skip = caret.col / width;
+                let line = self.formatted_line_at(caret.row).unwrap_or_default();
+                let indent = self.entry_indent_at(caret.row);
+                self.wrap_skip = wrap_display_row_for_col(&line, width, indent, caret.col);
                 let up = (self.viewport_height.max(1) - 1) as isize;
                 self.scroll_by_wrapped(-up);
             } else {
@@ -1325,7 +1336,9 @@ impl OhmylogcatApp {
         }
         if self.soft_wrap {
             let width = self.viewport_width.max(1);
-            caret.col / width < self.wrap_skip
+            let line = self.formatted_line_at(caret.row).unwrap_or_default();
+            let indent = self.entry_indent_at(caret.row);
+            wrap_display_row_for_col(&line, width, indent, caret.col) < self.wrap_skip
         } else {
             false
         }
@@ -1363,8 +1376,11 @@ impl OhmylogcatApp {
             let start_chunk = skip;
             let chunks_shown = h.saturating_sub(start_chunk);
             if idx == pos.row {
-                let chunk = pos.col / width;
-                if chunk >= start_chunk && chunk < start_chunk + chunks_shown.min(self.viewport_height - display_row)
+                let line = self.formatted_line_at(idx).unwrap_or_default();
+                let indent = self.entry_indent_at(idx);
+                let chunk = wrap_display_row_for_col(&line, width, indent, pos.col);
+                if chunk >= start_chunk
+                    && chunk < start_chunk + chunks_shown.min(self.viewport_height - display_row)
                 {
                     return true;
                 }
@@ -1482,9 +1498,20 @@ impl OhmylogcatApp {
 
     fn entry_wrap_height(&self, index: usize, width: usize) -> usize {
         match self.engine.filtered_get(index) {
-            Some(e) => wrap_line_count(&format_log_line(&e), width),
+            Some(e) => {
+                let line = format_log_line(&e);
+                let indent = message_column_indent(&e);
+                wrap_line_count(&line, width, indent)
+            }
             None => 1,
         }
+    }
+
+    fn entry_indent_at(&self, index: usize) -> usize {
+        self.engine
+            .filtered_get(index)
+            .map(|e| message_column_indent(&e))
+            .unwrap_or(0)
     }
 
     fn is_at_wrapped_bottom(&self) -> bool {
@@ -2044,27 +2071,34 @@ impl OhmylogcatApp {
                 let line_str = format_log_line(entry);
                 let base_color = self.theme.level_color(entry.level);
                 let is_current = current_row == Some(row_idx);
+                let indent = message_column_indent(entry);
 
-                // Jump directly to the first visible wrap chunk instead of
-                // iterating and discarding skipped chunks one-by-one.
-                let start_chunk = skip;
-                let remainder = visible_chars(&line_str, start_chunk * width, usize::MAX);
+                let mut skip_rows = skip;
                 skip = 0;
-                for (ci, chunk) in WrapChunks::new(&remainder, width).enumerate() {
+                for (logical_start, chunk) in WrapChunks::with_indent(&line_str, width, indent) {
+                    if skip_rows > 0 {
+                        skip_rows -= 1;
+                        continue;
+                    }
                     if items.len() >= height {
                         break;
                     }
-                    let abs_ci = start_chunk + ci;
-                    let line_char_start = abs_ci * width;
+                    let display = wrap_display_text(&chunk, logical_start, indent, width);
+                    let display_pad = if logical_start > 0 {
+                        effective_hang_indent(indent, width)
+                    } else {
+                        0
+                    };
                     let spans = line_spans(
-                        &chunk,
+                        &display,
                         row_idx,
-                        line_char_start,
+                        logical_start,
+                        display_pad,
                         base_color,
                         &self.theme,
                         &self.selection,
                         &find_q,
-                        is_current && abs_ci == 0,
+                        is_current && logical_start == 0,
                     );
                     items.push(ListItem::new(Line::from(spans)));
                 }
@@ -2084,6 +2118,7 @@ impl OhmylogcatApp {
                     &visible,
                     row_idx,
                     self.col_offset,
+                    0,
                     base_color,
                     &self.theme,
                     &self.selection,

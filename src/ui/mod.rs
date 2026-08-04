@@ -7,9 +7,13 @@ mod selection;
 mod text_input;
 mod theme;
 
-pub use display::{visible_chars, wrap_line_count, WrapChunks};
+pub use display::{
+    effective_hang_indent, visible_chars, wrap_chunk_at_col, wrap_display_col,
+    wrap_display_row_for_col, wrap_display_text, wrap_line_count, wrap_logical_col_from_display,
+    WrapChunks,
+};
 pub use find::FindState;
-pub use format::format_log_line;
+pub use format::{format_log_line, message_column_indent};
 pub use i18n::{LanguagePreference, Locale, UiStrings};
 pub use pointer::{reset_pointer_shape, set_pointer_shape, PointerShape};
 pub use selection::{
