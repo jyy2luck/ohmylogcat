@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines how the TUI picks colors: shell chrome follows the host terminal defaults, while log levels and interaction accents use dual Android Studio–aligned RGB palettes chosen by silent host-background detection (dark fallback), with no user-selectable theme mode.
+Defines how the TUI picks colors: shell chrome follows the host terminal defaults, while log levels use the single Android Logcat 4-color palette (Verbose uncolored, Debug blue, Info green, Warn orange, Error red) with no background detection and no user-selectable theme mode.
 
 ## Requirements
 
@@ -20,24 +20,24 @@ The system SHALL render main-shell chrome text (toolbar labels, filter-row label
 - **WHEN** the application runs in a light-background terminal
 - **THEN** toolbar, filter-row, separator, and status chrome remain readable using the terminal default colors without applying a dark-theme forced light-gray foreground
 
-### Requirement: Semantic accents use dual Android Studio palettes
+### Requirement: Semantic accents use dual Android Studio Logcat palettes
 
-The system SHALL apply one of two RGB accent palettes for log level colors, focus highlight, text selection, and find-match highlighting, chosen by silent host-terminal background detection:
+The system SHALL apply one of two RGB level palettes from Android Studio's Android Logcat color scheme, chosen by silent host-terminal background detection:
 
-- **Light palette**: IntelliJ Default / IntelliJ Light console `LOG_*` colors (Info green).
-- **Dark palette**: Android Studio New UI / Islands Dark console `LOG_*` colors (Info gold).
+- **Dark palette**: Verbose `#BBBBBB`, Debug `#299999`, Info `#ABC023`, Warn `#BBB529`, Error/Fatal `#FF6B68`.
+- **Light palette**: Verbose `#000000`, Debug `#389FD6`, Info `#59A869`, Warn `#645607`, Error/Fatal `#CD0000`.
 
-The choice SHALL NOT depend on a user theme preference. Shell chrome SHALL continue to inherit terminal defaults independently of which accent palette is active.
+Focus highlight, text selection, and find-match highlighting SHALL use fixed interaction accents independent of which level palette is active. The choice SHALL NOT depend on a user theme preference. Shell chrome SHALL continue to inherit terminal defaults independently of which accent palette is active.
 
 #### Scenario: Light terminal uses light Info green
 
 - **WHEN** the host terminal background is detected as light
-- **THEN** Info-level log styling uses the light accent Info color (green) and remains visually distinct from Error
+- **THEN** Info-level log styling uses the light accent Info color (`#59A869`) and remains visually distinct from Error
 
-#### Scenario: Dark terminal uses New UI Info gold
+#### Scenario: Dark terminal uses dark Info olive
 
 - **WHEN** the host terminal background is detected as dark
-- **THEN** Info-level log styling uses the dark accent Info color (gold) and remains visually distinct from Error
+- **THEN** Info-level log styling uses the dark accent Info color (`#ABC023`) and remains visually distinct from Error
 
 #### Scenario: Detection failure falls back to dark
 
@@ -48,6 +48,11 @@ The choice SHALL NOT depend on a user theme preference. Shell chrome SHALL conti
 
 - **WHEN** the log viewport shows an Error or Fatal entry
 - **THEN** that entry's level styling uses the active palette's error accent and remains visually distinct from Info
+
+#### Scenario: Info is visually distinct from the find highlight
+
+- **WHEN** a find match is shown in an Info-level log entry
+- **THEN** the find-match highlight remains black-on-yellow and does not blend with the Info foreground
 
 #### Scenario: Find and selection remain distinct
 

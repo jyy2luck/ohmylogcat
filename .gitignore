@@ -19,6 +19,7 @@ src-tauri/target/
 # Editor directories and files
 .claude/
 .cursor/
+.opencode/
 .vscode/*
 !.vscode/extensions.json
 .idea

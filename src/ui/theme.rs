@@ -3,7 +3,7 @@ use ratatui::style::Color;
 
 /// Semantic accent palette. Shell chrome inherits the terminal default;
 /// only levels, focus, selection, and find use these colors.
-/// Level colors come from Android Studio / IntelliJ console `LOG_*`;
+/// Level colors come from Android Studio → Color Scheme → Android Logcat;
 /// light vs dark is chosen once at startup via host-background detection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
@@ -21,26 +21,26 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// IntelliJ Default / IntelliJ Light console `LOG_*` colors.
+    /// Android Studio Logcat light scheme level colors (HEX → RGB).
     pub fn light_accents() -> Self {
         Self {
-            level_verbose: rgb(0x00, 0x00, 0xee),
-            level_debug: rgb(0x00, 0xcc, 0xcc),
-            level_info: rgb(0x00, 0xcd, 0x00),
-            level_warn: rgb(0xa6, 0x6f, 0x00),
-            level_error: rgb(0xcd, 0x00, 0x00),
+            level_verbose: rgb(0, 0, 0),             // #000000
+            level_debug: rgb(56, 159, 214),          // #389FD6
+            level_info: rgb(89, 168, 105),           // #59A869
+            level_warn: rgb(100, 86, 7),             // #645607
+            level_error: rgb(205, 0, 0),             // #CD0000
             ..Self::interaction_accents()
         }
     }
 
-    /// Android Studio New UI / Islands Dark console `LOG_*` colors.
+    /// Android Studio Logcat dark scheme level colors (HEX → RGB).
     pub fn dark_accents() -> Self {
         Self {
-            level_verbose: rgb(0x56, 0xa8, 0xf5),
-            level_debug: rgb(0x29, 0x99, 0x99),
-            level_info: rgb(0xe0, 0xbb, 0x65),
-            level_warn: rgb(0xa6, 0x6f, 0x00),
-            level_error: rgb(0xf7, 0x54, 0x64),
+            level_verbose: rgb(187, 187, 187),       // #BBBBBB
+            level_debug: rgb(41, 153, 153),          // #299999
+            level_info: rgb(171, 192, 35),           // #ABC023
+            level_warn: rgb(187, 181, 41),           // #BBB529
+            level_error: rgb(255, 107, 104),         // #FF6B68
             ..Self::interaction_accents()
         }
     }
@@ -109,32 +109,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn light_and_dark_level_rgb_match_design() {
+    fn light_and_dark_level_rgb_match_as_logcat() {
         let light = Theme::light_accents();
-        assert_eq!(light.level_verbose, Color::Rgb(0x00, 0x00, 0xee));
-        assert_eq!(light.level_debug, Color::Rgb(0x00, 0xcc, 0xcc));
-        assert_eq!(light.level_info, Color::Rgb(0x00, 0xcd, 0x00));
-        assert_eq!(light.level_warn, Color::Rgb(0xa6, 0x6f, 0x00));
-        assert_eq!(light.level_error, Color::Rgb(0xcd, 0x00, 0x00));
+        assert_eq!(light.level_verbose, Color::Rgb(0, 0, 0)); // #000000
+        assert_eq!(light.level_debug, Color::Rgb(56, 159, 214)); // #389FD6
+        assert_eq!(light.level_info, Color::Rgb(89, 168, 105)); // #59A869
+        assert_eq!(light.level_warn, Color::Rgb(100, 86, 7)); // #645607
+        assert_eq!(light.level_error, Color::Rgb(205, 0, 0)); // #CD0000
 
         let dark = Theme::dark_accents();
-        assert_eq!(dark.level_verbose, Color::Rgb(0x56, 0xa8, 0xf5));
-        assert_eq!(dark.level_debug, Color::Rgb(0x29, 0x99, 0x99));
-        assert_eq!(dark.level_info, Color::Rgb(0xe0, 0xbb, 0x65));
-        assert_eq!(dark.level_warn, Color::Rgb(0xa6, 0x6f, 0x00));
-        assert_eq!(dark.level_error, Color::Rgb(0xf7, 0x54, 0x64));
+        assert_eq!(dark.level_verbose, Color::Rgb(187, 187, 187)); // #BBBBBB
+        assert_eq!(dark.level_debug, Color::Rgb(41, 153, 153)); // #299999
+        assert_eq!(dark.level_info, Color::Rgb(171, 192, 35)); // #ABC023
+        assert_eq!(dark.level_warn, Color::Rgb(187, 181, 41)); // #BBB529
+        assert_eq!(dark.level_error, Color::Rgb(255, 107, 104)); // #FF6B68
 
         assert_ne!(dark.level_info, light.level_info);
         assert_ne!(dark.level_error, dark.level_info);
         assert_ne!(light.level_error, light.level_info);
         assert_eq!(dark.find_bg, light.find_bg);
+        assert_eq!(dark.find_fg, Color::Black);
+        assert_eq!(dark.find_bg, Color::Yellow);
         assert_ne!(dark.find_bg, dark.selection_bg);
     }
 
     #[test]
     fn resolve_without_colorfgbg_yields_dark() {
         if std::env::var("COLORFGBG").is_ok() {
-            // Process env already set; assert the helper path instead.
             assert!(!detect_light_background_from(None));
             assert_eq!(
                 if detect_light_background_from(None) {
@@ -166,7 +167,7 @@ mod tests {
             Theme::dark_accents()
         };
         assert_eq!(theme.level_info, Theme::light_accents().level_info);
-        assert_eq!(theme.level_info, Color::Rgb(0x00, 0xcd, 0x00));
+        assert_eq!(theme.level_info, Color::Rgb(89, 168, 105)); // #59A869
     }
 
     #[test]
