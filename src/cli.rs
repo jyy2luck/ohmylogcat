@@ -15,8 +15,8 @@ const INSTALL_SH_URL: &str =
 #[cfg(windows)]
 const INSTALL_PS1_URL: &str =
     "https://raw.githubusercontent.com/jyy2luck/ohmylogcat/main/install.ps1";
-const RELEASES_API: &str =
-    "https://api.github.com/repos/jyy2luck/ohmylogcat/releases/latest";
+const RELEASES_LATEST_URL: &str =
+    "https://github.com/jyy2luck/ohmylogcat/releases/latest";
 const INSTALL_RESULT_PREFIX: &str = "ohmylogcat-install-result:";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -484,13 +484,14 @@ fn select_update_outcome(
 }
 
 fn fetch_latest_release_version() -> Result<String, String> {
-    let body = fetch_url(RELEASES_API)?;
-    let tag = extract_json_string_field(&body, "tag_name")
-        .ok_or_else(|| "missing tag_name in release metadata".to_string())?;
-    Ok(tag.trim_start_matches('v').to_string())
+    let location = resolve_latest_release_location(RELEASES_LATEST_URL)?;
+    extract_version_from_release_url(&location).ok_or_else(|| {
+        format!("could not parse release tag from redirect URL: {location}")
+    })
 }
 
-fn fetch_url(url: &str) -> Result<String, String> {
+/// Follow `releases/latest` redirects and return the final (or Location) URL.
+fn resolve_latest_release_location(url: &str) -> Result<String, String> {
     #[cfg(windows)]
     {
         let output = Command::new("powershell")
@@ -499,47 +500,108 @@ fn fetch_url(url: &str) -> Result<String, String> {
                 "-Command",
                 &format!(
                     "$ProgressPreference='SilentlyContinue'; \
-                     (Invoke-WebRequest -Uri '{url}' -Headers @{{'User-Agent'='ohmylogcat';'Accept'='application/vnd.github+json'}} -UseBasicParsing).Content"
+                     $ErrorActionPreference='Stop'; \
+                     try {{ \
+                       $r = Invoke-WebRequest -Uri '{url}' -MaximumRedirection 0 \
+                         -Headers @{{'User-Agent'='ohmylogcat'}} -UseBasicParsing; \
+                       if ($r.Headers.Location) {{ $r.Headers.Location }} else {{ $r.BaseResponse.ResponseUri.AbsoluteUri }} \
+                     }} catch {{ \
+                       if ($_.Exception.Response -and $_.Exception.Response.Headers['Location']) {{ \
+                         $_.Exception.Response.Headers['Location'] \
+                       }} elseif ($_.Exception.Response -and $_.Exception.Response.Headers.Location) {{ \
+                         $_.Exception.Response.Headers.Location \
+                       }} else {{ throw }} \
+                     }}"
                 ),
             ])
             .output()
-            .map_err(|e| format!("failed to fetch {url}: {e}"))?;
+            .map_err(|e| format!("failed to resolve {url}: {e}"))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("failed to fetch {url}: {stderr}"));
+            return Err(format!("failed to resolve {url}: {stderr}"));
         }
-        String::from_utf8(output.stdout).map_err(|e| e.to_string())
+        let location = String::from_utf8(output.stdout)
+            .map_err(|e| e.to_string())?
+            .trim()
+            .to_string();
+        if location.is_empty() {
+            return Err(format!("empty redirect Location for {url}"));
+        }
+        Ok(location)
     }
     #[cfg(not(windows))]
     {
+        // Prefer Location from the first hop (no body download); fall back to
+        // the effective URL after following redirects.
+        let head = Command::new("curl")
+            .args(["-fsSI", "-H", "User-Agent: ohmylogcat", url])
+            .output()
+            .map_err(|e| format!("failed to resolve {url}: {e}"))?;
+        if head.status.success() {
+            let headers = String::from_utf8_lossy(&head.stdout);
+            if let Some(location) = location_header_value(&headers) {
+                return Ok(location);
+            }
+        }
+
         let output = Command::new("curl")
             .args([
                 "-fsSL",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{url_effective}",
                 "-H",
                 "User-Agent: ohmylogcat",
-                "-H",
-                "Accept: application/vnd.github+json",
                 url,
             ])
             .output()
-            .map_err(|e| format!("failed to fetch {url}: {e}"))?;
+            .map_err(|e| format!("failed to resolve {url}: {e}"))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("failed to fetch {url}: {stderr}"));
+            return Err(format!("failed to resolve {url}: {stderr}"));
         }
-        String::from_utf8(output.stdout).map_err(|e| e.to_string())
+        let location = String::from_utf8(output.stdout)
+            .map_err(|e| e.to_string())?
+            .trim()
+            .to_string();
+        if location.is_empty() {
+            return Err(format!("empty effective URL for {url}"));
+        }
+        Ok(location)
     }
 }
 
-fn extract_json_string_field(json: &str, field: &str) -> Option<String> {
-    let key = format!("\"{field}\"");
-    let idx = json.find(&key)?;
-    let after = &json[idx + key.len()..];
-    let after = after.trim_start();
-    let after = after.strip_prefix(':')?.trim_start();
-    let after = after.strip_prefix('"')?;
-    let end = after.find('"')?;
-    Some(after[..end].to_string())
+fn location_header_value(headers: &str) -> Option<String> {
+    for line in headers.lines() {
+        let line = line.trim();
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case("location") {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Extract semver from a GitHub release tag URL or Location header value.
+///
+/// Accepts forms like:
+/// - `https://github.com/owner/repo/releases/tag/v0.4.0`
+/// - `/owner/repo/releases/tag/v0.4.0`
+fn extract_version_from_release_url(url: &str) -> Option<String> {
+    let marker = "/releases/tag/";
+    let idx = url.find(marker)?;
+    let tag = &url[idx + marker.len()..];
+    let tag = tag.split(['/', '?', '#']).next()?.trim();
+    if tag.is_empty() {
+        return None;
+    }
+    Some(tag.trim_start_matches('v').to_string())
 }
 
 fn remove_release_binary(binary: &Path) -> Result<(), String> {
@@ -705,11 +767,40 @@ mod tests {
     }
 
     #[test]
-    fn extract_tag_name() {
-        let json = r#"{"tag_name": "v0.1.0", "name": "x"}"#;
+    fn extract_version_from_release_location() {
         assert_eq!(
-            extract_json_string_field(json, "tag_name").as_deref(),
-            Some("v0.1.0")
+            extract_version_from_release_url(
+                "https://github.com/jyy2luck/ohmylogcat/releases/tag/v0.4.0"
+            )
+            .as_deref(),
+            Some("0.4.0")
+        );
+        assert_eq!(
+            extract_version_from_release_url("/jyy2luck/ohmylogcat/releases/tag/v1.2.3?foo=1")
+                .as_deref(),
+            Some("1.2.3")
+        );
+        assert_eq!(
+            extract_version_from_release_url(
+                "https://github.com/jyy2luck/ohmylogcat/releases/tag/0.3.0#notes"
+            )
+            .as_deref(),
+            Some("0.3.0")
+        );
+        assert_eq!(
+            extract_version_from_release_url("https://github.com/jyy2luck/ohmylogcat/releases/latest"),
+            None
+        );
+    }
+
+    #[test]
+    fn location_header_parsing() {
+        let headers = "HTTP/2 302\r\n\
+             location: https://github.com/jyy2luck/ohmylogcat/releases/tag/v0.4.0\r\n\
+             content-type: text/html\r\n";
+        assert_eq!(
+            location_header_value(headers).as_deref(),
+            Some("https://github.com/jyy2luck/ohmylogcat/releases/tag/v0.4.0")
         );
     }
 

@@ -10,7 +10,8 @@ $ErrorActionPreference = "Stop"
 $Repo = "jyy2luck/ohmylogcat"
 $Asset = "ohmylogcat-x86_64-pc-windows-msvc.zip"
 $InstallDir = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "ohmylogcat" }
-$Api = "https://api.github.com/repos/$Repo/releases/latest"
+# Direct latest/download URL (avoids unauthenticated GitHub REST API rate limits).
+$LatestDownloadUrl = "https://github.com/$Repo/releases/latest/download/$Asset"
 $RetrySeconds = 60
 $retryOverride = 0
 if ($env:OHMYLOGCAT_UPDATE_RETRY_SECONDS -and
@@ -252,27 +253,7 @@ exit 1
 }
 
 $sourceOverride = $env:OHMYLOGCAT_INSTALL_SOURCE
-if ($sourceOverride) {
-    $url = $null
-} else {
-    Write-Host "Fetching latest release metadata..."
-    $headers = @{
-        "User-Agent" = "ohmylogcat-install"
-        "Accept"     = "application/vnd.github+json"
-    }
-    $release = Invoke-RestMethod -Uri $Api -Headers $headers
-    $assetInfo = $release.assets | Where-Object { $_.name -eq $Asset } | Select-Object -First 1
-
-    if (-not $assetInfo) {
-        $tag = $release.tag_name
-        if (-not $tag) {
-            throw "Could not find a GitHub release. Publish a tag like v0.1.0 first."
-        }
-        $url = "https://github.com/$Repo/releases/download/$tag/$Asset"
-    } else {
-        $url = $assetInfo.browser_download_url
-    }
-}
+$url = if ($sourceOverride) { $null } else { $LatestDownloadUrl }
 
 $tmpdir = Join-Path ([System.IO.Path]::GetTempPath()) ("ohmylogcat-install-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $tmpdir | Out-Null
@@ -286,10 +267,18 @@ try {
     $zipPath = Join-Path $tmpdir $Asset
     if ($sourceOverride) {
         Write-Host "Using local release archive $sourceOverride..."
+        if (-not (Test-Path -LiteralPath $sourceOverride -PathType Leaf)) {
+            throw "Local install source not found: $sourceOverride"
+        }
         Copy-Item -LiteralPath $sourceOverride -Destination $zipPath -Force
     } else {
         Write-Host "Downloading $Asset..."
-        Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+        Write-Host "  from $url"
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+        } catch {
+            throw "Download failed for $url. $($_.Exception.Message) Check network access and that a Release publishes asset: $Asset"
+        }
     }
 
     Write-Host "Extracting..."

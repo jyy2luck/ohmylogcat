@@ -56,6 +56,8 @@ The application is designed for long-running sessions. It keeps a bounded ring b
 
 Prebuilt binaries are published on [GitHub Releases](https://github.com/jyy2luck/ohmylogcat/releases). You still need **adb**; see [Prerequisites](#prerequisites).
 
+Install and `ohmylogcat update` download the platform asset via GitHub’s `releases/latest/download/...` URL (not the REST API), so unauthenticated `api.github.com` rate-limit **403** responses do not block install.
+
 ### macOS
 
 The installer supports both Apple Silicon and Intel Macs:

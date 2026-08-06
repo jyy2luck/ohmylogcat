@@ -2,11 +2,12 @@
 # Install ohmylogcat from the latest GitHub Release into ~/.local/bin (or $INSTALL_DIR).
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/jyy2luck/ohmylogcat/main/install.sh | sh
+# Optional local override for tests:
+#   OHMYLOGCAT_INSTALL_SOURCE=/path/to/archive.tar.gz INSTALL_DIR=... sh install.sh
 set -eu
 
 REPO="jyy2luck/ohmylogcat"
 INSTALL_DIR="${INSTALL_DIR:-${HOME}/.local/bin}"
-API="https://api.github.com/repos/${REPO}/releases/latest"
 
 os="$(uname -s)"
 arch="$(uname -m)"
@@ -49,26 +50,30 @@ fi
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "${tmpdir}"' EXIT
 
-echo "Fetching latest release metadata..."
-json="$(curl -fsSL "${API}")"
+archive_path="${tmpdir}/${asset}"
+source_override="${OHMYLOGCAT_INSTALL_SOURCE:-}"
 
-# Prefer downloading via browser_download_url for the matching asset.
-url="$(printf '%s' "${json}" | sed -n "s/.*\"browser_download_url\": \"\\([^\"]*${asset}\\)\".*/\\1/p" | head -n 1)"
-
-if [ -z "${url}" ]; then
-  tag="$(printf '%s' "${json}" | sed -n 's/.*"tag_name": "\([^"]*\)".*/\1/p' | head -n 1)"
-  if [ -z "${tag}" ]; then
-    echo "Could not find a GitHub release. Publish a tag like v0.1.0 first." >&2
+if [ -n "${source_override}" ]; then
+  echo "Using local release archive ${source_override}..."
+  if [ ! -f "${source_override}" ]; then
+    echo "Local install source not found: ${source_override}" >&2
     exit 1
   fi
-  url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
+  cp "${source_override}" "${archive_path}"
+else
+  # Direct latest/download URL (avoids unauthenticated GitHub REST API rate limits).
+  url="https://github.com/${REPO}/releases/latest/download/${asset}"
+  echo "Downloading ${asset}..."
+  echo "  from ${url}"
+  if ! curl -fL --progress-bar "${url}" -o "${archive_path}"; then
+    echo "Download failed for ${url}" >&2
+    echo "Check network access and that a Release publishes asset: ${asset}" >&2
+    exit 1
+  fi
 fi
 
-echo "Downloading ${asset}..."
-curl -fsSL "${url}" -o "${tmpdir}/${asset}"
-
 echo "Extracting..."
-tar -xzf "${tmpdir}/${asset}" -C "${tmpdir}"
+tar -xzf "${archive_path}" -C "${tmpdir}"
 
 if [ ! -f "${tmpdir}/ohmylogcat" ]; then
   echo "Archive did not contain ohmylogcat binary" >&2
