@@ -2,8 +2,9 @@
 name = "ohmylogcat"
 version = "0.4.0"
 description = "A lightweight Android Logcat viewer"
-authors = ["jyy"]
+authors = ["jiangyangyang"]
 edition = "2021"
+license = "MIT"
 repository = "https://github.com/jyy2luck/ohmylogcat"
 homepage = "https://github.com/jyy2luck/ohmylogcat"
 
