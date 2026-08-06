@@ -2361,13 +2361,16 @@ impl OhmylogcatApp {
         };
         let filtered = self.engine.filtered_len();
         let text = format!(
-            "{}  {}/{}/{}  {:.0} lines/s  ~{:.1} MB  {}  {}  {}",
+            "{}  {}/{}/{}{}  {:.0}{}  ~{:.1}MB{}  {}  {}  {}",
             live_txt,
             filtered,
             self.stats.count,
             self.stats.capacity,
+            self.ui.status_counts_hint,
             self.stats.lines_per_sec,
+            self.ui.status_rate_unit,
             self.stats.memory_estimate_mb,
+            self.ui.status_mem_hint,
             focus_hint,
             wrap_hint,
             err

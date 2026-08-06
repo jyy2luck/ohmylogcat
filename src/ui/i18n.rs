@@ -126,6 +126,9 @@ pub struct UiStrings {
     // Status bar
     pub status_live: &'static str,
     pub status_idle: &'static str,
+    pub status_counts_hint: &'static str,
+    pub status_rate_unit: &'static str,
+    pub status_mem_hint: &'static str,
     pub focus_logs: &'static str,
     pub focus_level: &'static str,
     pub focus_find: &'static str,
@@ -205,8 +208,11 @@ impl UiStrings {
 
             empty_logs: "No logs — press [d] to select a device",
 
-            status_live: "● Live",
+            status_live: "● Streaming",
             status_idle: "○ Idle",
+            status_counts_hint: "(filtered/stored/max)",
+            status_rate_unit: " lines/s(rate)",
+            status_mem_hint: "(mem)",
             focus_logs: "focus:logs",
             focus_level: "focus:level",
             focus_find: "focus:find",
@@ -275,8 +281,11 @@ impl UiStrings {
 
             empty_logs: "暂无日志 — 按 [d] 选择设备",
 
-            status_live: "● 实时",
+            status_live: "● 拉流中",
             status_idle: "○ 空闲",
+            status_counts_hint: "(筛选/已存/上限)",
+            status_rate_unit: " 行/秒(速率)",
+            status_mem_hint: "(内存)",
             focus_logs: "焦点:日志",
             focus_level: "焦点:级别",
             focus_find: "焦点:查找",
@@ -345,8 +354,11 @@ impl UiStrings {
 
             empty_logs: "暫無日誌 — 按 [d] 選擇裝置",
 
-            status_live: "● 即時",
-            status_idle: "○ 閒置",
+            status_live: "● 拉流中",
+            status_idle: "○ 空閒",
+            status_counts_hint: "(篩選/已存/上限)",
+            status_rate_unit: " 行/秒(速率)",
+            status_mem_hint: "(記憶體)",
             focus_logs: "焦點:日誌",
             focus_level: "焦點:級別",
             focus_find: "焦點:尋找",
@@ -479,6 +491,25 @@ mod tests {
         let _ = UiStrings::for_locale(Locale::En);
         let _ = UiStrings::for_locale(Locale::ZhHans);
         let _ = UiStrings::for_locale(Locale::ZhHant);
+    }
+
+    #[test]
+    fn status_indicator_copy_describes_stream_state() {
+        assert_eq!(
+            UiStrings::for_locale(Locale::En).status_live,
+            "● Streaming"
+        );
+        assert_eq!(UiStrings::for_locale(Locale::En).status_idle, "○ Idle");
+        assert_eq!(
+            UiStrings::for_locale(Locale::ZhHans).status_live,
+            "● 拉流中"
+        );
+        assert_eq!(UiStrings::for_locale(Locale::ZhHans).status_idle, "○ 空闲");
+        assert_eq!(
+            UiStrings::for_locale(Locale::ZhHant).status_live,
+            "● 拉流中"
+        );
+        assert_eq!(UiStrings::for_locale(Locale::ZhHant).status_idle, "○ 空閒");
     }
 
     #[test]
