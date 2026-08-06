@@ -142,57 +142,6 @@ brew install android-platform-tools
 
 The default SDK path is `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`. Configure a custom path in Settings if `adb` is installed elsewhere.
 
-## Build and run
-
-```bash
-# Development (run inside a real terminal)
-cargo run
-
-# Lifecycle commands without starting the TUI
-cargo run -- --version
-cargo run -- --help
-
-# Release binary
-cargo build --release
-```
-
-The release binary is written to:
-
-- macOS and Linux: `target/release/ohmylogcat`
-- Windows: `target/release/ohmylogcat.exe`
-
-Run the test suite with:
-
-```bash
-cargo test
-```
-
-### Publishing a release
-
-Maintainers can push a version tag to trigger [.github/workflows/release.yml](.github/workflows/release.yml):
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-### Smoke checklist
-
-**All supported terminals**
-
-- [ ] Launch shows the toolbar, filter row, log viewport, and status bar with section dividers.
-- [ ] Device modal (`d`) lists devices, selecting one starts the stream, and refresh works.
-- [ ] Pause, Clear, Follow, and Soft-Wrap work from their shortcuts and toolbar controls.
-- [ ] Tag, Message, and Level filters update the visible logs without restarting the stream.
-- [ ] Find (`/`) highlights matches and supports next/previous navigation.
-- [ ] Filtered and all-log exports write the expected threadtime text.
-- [ ] Settings changes persist across restarts.
-- [ ] Text selection remains visible after creation and is not copied until Cmd+C or Ctrl+C is pressed.
-
-**Windows Terminal**
-
-- [ ] Mouse clicks on toolbar and filter labels work when mouse support is available.
-- [ ] Colors, alternate-screen mode, and terminal state are restored after quitting with `q`.
 
 ## Architecture
 
@@ -290,7 +239,3 @@ The Settings modal persists changes immediately. Available settings include:
 
 The application does not persist or expose a theme preference. Level accents are selected automatically from the terminal environment, while interaction highlights remain fixed.
 
-## Repository documentation
-
-- `openspec/specs/` contains the product and behavior specifications.
-- `.github/workflows/release.yml` defines the published release targets.
