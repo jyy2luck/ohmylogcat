@@ -1176,7 +1176,31 @@ impl OhmylogcatApp {
         let Some(old) = self.caret else {
             return;
         };
-        let col = if home {
+        let col = if self.soft_wrap {
+            // Home/End move within the current wrap chunk so the caret stays on
+            // its display row instead of jumping across the whole logical line.
+            let line = self.formatted_line_at(old.row).unwrap_or_default();
+            let width = self.viewport_width.max(1);
+            let indent = self.entry_indent_at(old.row);
+            let line_len = self.line_len_at(old.row);
+            // `wrap_chunk_at_col` returns the chunk whose row `old.col` renders on
+            // (the boundary gap col == chunk_end belongs to the *next* chunk's
+            // row, matching `log_pos_to_screen_wrapped` / `mouse_to_log_pos_wrapped`).
+            let (_, chunk_start, chunk_len) = wrap_chunk_at_col(&line, width, indent, old.col);
+            let chunk_end = chunk_start + chunk_len;
+            let is_final_chunk = chunk_end == line_len;
+            if home {
+                chunk_start
+            } else if is_final_chunk {
+                // Final chunk: the line-end gap (== line_len) sits on this row.
+                chunk_end
+            } else {
+                // Non-final chunk: the gap after the last char belongs to the next
+                // row, so the rightmost reachable gap on this row is the last
+                // character's left gap (matches a right-edge mouse click).
+                chunk_end.saturating_sub(1)
+            }
+        } else if home {
             0
         } else {
             self.line_len_at(old.row)
@@ -1196,10 +1220,12 @@ impl OhmylogcatApp {
         } else {
             self.move_caret_vertical_nowrap(old, delta_rows, preferred)
         };
-        // Preserve preferred column across short lines.
-        self.caret_preferred_col = preferred;
+        // `apply_caret_move` sets `caret_preferred_col = display_col_of(new)`.
+        // When the move reaches `preferred` the value is unchanged; when it is
+        // clamped to a chunk/line boundary the preferred column is updated to
+        // the reached display column, so vertical motion stays visually
+        // vertical in both soft-wrap and non-soft-wrap modes.
         self.apply_caret_move(old, new, extend);
-        self.caret_preferred_col = preferred;
     }
 
     fn move_caret_vertical_nowrap(&self, old: LogPos, delta_rows: isize, preferred: usize) -> LogPos {
@@ -2439,4 +2465,227 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::LogEntry;
+
+    /// Build an app without disk I/O or device refresh so caret logic can be
+    /// exercised deterministically. `soft_wrap` and viewport size are set per
+    /// test by writing the fields directly.
+    fn build_app() -> OhmylogcatApp {
+        let rt = Runtime::new().expect("tokio runtime");
+        let settings = Settings::default();
+        let theme = Theme::default();
+        let locale = Locale::resolve(settings.language);
+        let ui = UiStrings::for_locale(locale);
+        let (engine, event_rx) = Engine::new(settings.buffer_capacity);
+        OhmylogcatApp {
+            _rt: rt,
+            engine,
+            event_rx,
+            settings: settings.clone(),
+            theme,
+            locale,
+            ui,
+            devices: Vec::new(),
+            selected_serial: None,
+            device_cursor: 0,
+            filter_tag: TextInput::new(),
+            filter_message: TextInput::new(),
+            filter_level: None,
+            stats: BufferStats::default(),
+            last_error: None,
+            status_message: None,
+            status_expires_at: None,
+            auto_scroll: false,
+            soft_wrap: false,
+            scroll_offset: 0,
+            wrap_skip: 0,
+            col_offset: 0,
+            viewport_height: 24,
+            viewport_width: 80,
+            focus: Focus::Logs,
+            modal: None,
+            settings_panel: SettingsPanelState::from_settings(&settings),
+            find: FindState::default(),
+            filter_dirty: false,
+            filter_changed_at: None,
+            last_device_refresh: Instant::now() - Duration::from_secs(60),
+            hit_map: HitMap::default(),
+            selection: TextSelection::default(),
+            caret: None,
+            caret_preferred_col: 0,
+            last_click_time: None,
+            last_click_screen: None,
+            click_count: 0,
+            last_mouse: None,
+            last_pointer: None,
+            last_hardware_cursor_bar: None,
+            follow_dirty: false,
+            should_quit: false,
+        }
+    }
+
+    /// Push entries into the engine buffer and rebuild the filtered view.
+    fn seed(app: &mut OhmylogcatApp, entries: &[LogEntry]) {
+        {
+            let mut buf = app.engine.buffer.lock().unwrap();
+            for e in entries {
+                buf.push(e.clone());
+            }
+        }
+        app.engine.re_filter();
+    }
+
+    fn entry(message: &str) -> LogEntry {
+        LogEntry {
+            timestamp: "01-01 00:00:00.000".into(),
+            pid: 1,
+            tid: 1,
+            level: LogLevel::Info,
+            tag: "T".into(),
+            message: message.into(),
+        }
+    }
+
+    /// formatted_line prefix is `{ts} {pid:5} {tid:5} {lvl} {tag}: ` =
+    /// 18 + 1 + 5 + 1 + 5 + 1 + 1 + 1 + 1 + 2 = 36 chars, so line_len = 36 + msg.
+    const PREFIX_LEN: usize = 36;
+
+    #[test]
+    fn soft_wrap_end_on_continuation_chunk_stays_on_chunk() {
+        // width=40, indent=36 -> hang=36, cont capacity = 4. line_len = 48.
+        // chunks: [0,40) len40, [40,44) len4, [44,48) len4.
+        let mut app = build_app();
+        app.soft_wrap = true;
+        app.viewport_width = 40;
+        let msg = "0123456789AB"; // 12 chars -> line_len 48
+        seed(&mut app, &[entry(msg)]);
+        let line_len = PREFIX_LEN + msg.chars().count();
+        assert_eq!(line_len, 48);
+
+        // Caret on chunk 1 (col 41, inside [40,44)). End -> 43 (last char of chunk 1),
+        // not 44 (chunk_end renders on the next row's start) and not 48 (line end).
+        app.caret = Some(LogPos { row: 0, col: 41 });
+        app.caret_preferred_col = app.display_col_of(app.caret.unwrap());
+        app.move_caret_line_bound(false, false);
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 43 }));
+        // End on the final chunk (col 45, inside [44,48)) -> 48 == line_len (no regression).
+        app.caret = Some(LogPos { row: 0, col: 45 });
+        app.move_caret_line_bound(false, false);
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: line_len }));
+    }
+
+    #[test]
+    fn soft_wrap_home_on_continuation_chunk_goes_to_chunk_start() {
+        let mut app = build_app();
+        app.soft_wrap = true;
+        app.viewport_width = 40;
+        let msg = "0123456789AB";
+        seed(&mut app, &[entry(msg)]);
+
+        // Caret on chunk 1 (col 42). Home -> 40 (chunk start), not 0.
+        app.caret = Some(LogPos { row: 0, col: 42 });
+        app.move_caret_line_bound(true, false);
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 40 }));
+        // Caret on chunk 2 (col 46). Home -> 44.
+        app.caret = Some(LogPos { row: 0, col: 46 });
+        app.move_caret_line_bound(true, false);
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 44 }));
+    }
+
+    #[test]
+    fn soft_wrap_end_on_first_chunk_stays_on_first_row() {
+        // Regression: End on the first display row of a wrapped line must not
+        // jump to the continuation row's start. col 40 (chunk0 end) renders on
+        // row 1, so End on chunk 0 must land on col 39 (last char of chunk 0).
+        let mut app = build_app();
+        app.soft_wrap = true;
+        app.viewport_width = 40;
+        let msg = "0123456789AB"; // line_len 48: chunks [0,40) [40,44) [44,48)
+        seed(&mut app, &[entry(msg)]);
+        let line = app.formatted_line_at(0).unwrap();
+
+        let before = wrap_display_row_for_col(&line, 40, 36, 30);
+        app.caret = Some(LogPos { row: 0, col: 30 });
+        app.move_caret_line_bound(false, false);
+        let after = wrap_display_row_for_col(&line, 40, 36, app.caret.unwrap().col);
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 39 }));
+        assert_eq!(before, 0, "caret started on row 0");
+        assert_eq!(after, 0, "End must keep caret on row 0, not jump to row 1");
+    }
+
+    #[test]
+    fn soft_wrap_vertical_clamp_updates_preferred_then_up_goes_directly_above() {
+        // Caret on chunk 0 at the level char (display col 31, left of hang=36).
+        // Down -> clamp to chunk 1 start (logical col 40, display 36); preferred
+        // updated 31 -> 36. Up -> chunk 0 at display 36 (directly above), NOT 31.
+        let mut app = build_app();
+        app.soft_wrap = true;
+        app.viewport_width = 40;
+        let msg = "0123456789AB";
+        seed(&mut app, &[entry(msg)]);
+
+        // Level char "I" sits at logical col 31 in the prefix.
+        let level_col = 31;
+        app.caret = Some(LogPos { row: 0, col: level_col });
+        app.caret_preferred_col = app.display_col_of(app.caret.unwrap());
+        assert_eq!(app.caret_preferred_col, 31);
+
+        // Down: clamp to continuation chunk start.
+        app.move_caret_vertical(1, false);
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 40 }));
+        assert_eq!(app.caret_preferred_col, 36, "preferred must update on clamp");
+
+        // Up: land directly above (display 36), not back at 31.
+        app.move_caret_vertical(-1, false);
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 36 }));
+        assert_eq!(app.caret_preferred_col, 36, "preferred preserved when reached");
+        assert_ne!(app.caret.unwrap().col, level_col);
+    }
+
+    #[test]
+    fn nowrap_vertical_clamp_to_short_line_end_then_continue_from_new_preferred() {
+        // row0 line_len=50, row1 line_len=40 (short), row2 line_len=50.
+        let mut app = build_app();
+        app.soft_wrap = false;
+        let long = "0123456789ABCD"; // 14 -> line_len 50
+        let short = "0123"; // 4 -> line_len 40
+        seed(&mut app, &[entry(long), entry(short), entry(long)]);
+        assert_eq!(app.line_len_at(0), 50);
+        assert_eq!(app.line_len_at(1), 40);
+        assert_eq!(app.line_len_at(2), 50);
+
+        // Caret at row0 end gap, preferred 50.
+        app.caret = Some(LogPos { row: 0, col: 50 });
+        app.caret_preferred_col = 50;
+
+        // Down -> clamp to row1 end (40); preferred updated to 40.
+        app.move_caret_vertical(1, false);
+        assert_eq!(app.caret, Some(LogPos { row: 1, col: 40 }));
+        assert_eq!(app.caret_preferred_col, 40, "preferred updated to short line end");
+
+        // Down to long row2 -> stays at 40 (new preferred), not back to 50.
+        app.move_caret_vertical(1, false);
+        assert_eq!(app.caret, Some(LogPos { row: 2, col: 40 }));
+        assert_eq!(app.caret_preferred_col, 40, "preferred preserved when reached");
+    }
+
+    #[test]
+    fn nowrap_vertical_preserves_preferred_when_column_reachable() {
+        // Two equally long lines: moving down reaches preferred, preferred kept.
+        let mut app = build_app();
+        app.soft_wrap = false;
+        let long = "0123456789ABCD"; // line_len 50
+        seed(&mut app, &[entry(long), entry(long)]);
+        app.caret = Some(LogPos { row: 0, col: 20 });
+        app.caret_preferred_col = 20;
+
+        app.move_caret_vertical(1, false);
+        assert_eq!(app.caret, Some(LogPos { row: 1, col: 20 }));
+        assert_eq!(app.caret_preferred_col, 20, "preferred preserved across equal lines");
+    }
 }
