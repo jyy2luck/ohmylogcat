@@ -1,6 +1,6 @@
 //! Mouse text selection and caret geometry in the log viewport.
 
-use crate::ui::display::{effective_hang_indent, WrapChunks};
+use crate::ui::display::{effective_hang_indent, WrapCaretSide, WrapChunks};
 use crate::ui::format::message_column_indent_line;
 use crate::ui::Theme;
 use ratatui::layout::Rect;
@@ -259,11 +259,23 @@ pub fn log_pos_to_screen(
     line_at: impl Fn(usize) -> Option<String>,
     row_count: usize,
 ) -> Option<(u16, u16)> {
+    log_pos_to_screen_with_side(pos, map, line_at, row_count, WrapCaretSide::NextRow)
+}
+
+/// Map a log caret position to a screen cell, honoring the visual side of an
+/// internal Soft-Wrap boundary gap.
+pub fn log_pos_to_screen_with_side(
+    pos: LogPos,
+    map: &ViewportMap,
+    line_at: impl Fn(usize) -> Option<String>,
+    row_count: usize,
+    side: WrapCaretSide,
+) -> Option<(u16, u16)> {
     if row_count == 0 || pos.row >= row_count {
         return None;
     }
     if map.soft_wrap {
-        log_pos_to_screen_wrapped(pos, map, line_at, row_count)
+        log_pos_to_screen_wrapped(pos, map, line_at, row_count, side)
     } else {
         log_pos_to_screen_nowrap(pos, map, line_at)
     }
@@ -309,6 +321,7 @@ fn log_pos_to_screen_wrapped(
     map: &ViewportMap,
     line_at: impl Fn(usize) -> Option<String>,
     row_count: usize,
+    side: WrapCaretSide,
 ) -> Option<(u16, u16)> {
     let width = map.viewport_width.max(1);
     let mut display_row = 0usize;
@@ -343,8 +356,16 @@ fn log_pos_to_screen_wrapped(
             let chunk_end = chunk_start + chunk_chars;
             // The line-end gap (col == line_len) belongs to the final chunk.
             let is_final_chunk = chunk_end == line_len;
+            let at_start_boundary = chunk_start > 0 && pos.col == chunk_start;
+            let at_end_boundary = !is_final_chunk && pos.col == chunk_end;
             let in_chunk = if is_final_chunk {
-                pos.col >= chunk_start && pos.col <= chunk_end
+                pos.col >= chunk_start
+                    && pos.col <= chunk_end
+                    && !(at_start_boundary && side == WrapCaretSide::PreviousRow)
+             } else if at_end_boundary {
+                side == WrapCaretSide::PreviousRow
+            } else if at_start_boundary {
+                side == WrapCaretSide::NextRow
             } else {
                 pos.col >= chunk_start && pos.col < chunk_end
             };
@@ -778,6 +799,58 @@ mod tests {
         assert_eq!(
             log_pos_to_screen(LogPos { row: 0, col: 0 }, &m_skip, lines(&rows), 1),
             None
+        );
+    }
+
+    #[test]
+    fn log_pos_to_screen_wrapped_boundary_sides() {
+        let rows = ["0123456789ABCDEF"];
+        let m = map(true, 0, 0, 0);
+        assert_eq!(
+            log_pos_to_screen_with_side(
+                LogPos { row: 0, col: 10 },
+                &m,
+                lines(&rows),
+                1,
+                WrapCaretSide::PreviousRow,
+            ),
+            Some((2 + 10, 3))
+        );
+        assert_eq!(
+            log_pos_to_screen_with_side(
+                LogPos { row: 0, col: 10 },
+                &m,
+                lines(&rows),
+                1,
+                WrapCaretSide::NextRow,
+            ),
+            Some((2, 3 + 1))
+        );
+    }
+
+    #[test]
+    fn log_pos_to_screen_wrapped_boundary_sides_with_hang_indent() {
+        let rows = ["01234: 5678901234abcd"];
+        let m = map(true, 0, 0, 0);
+        assert_eq!(
+            log_pos_to_screen_with_side(
+                LogPos { row: 0, col: 10 },
+                &m,
+                lines(&rows),
+                1,
+                WrapCaretSide::PreviousRow,
+            ),
+            Some((2 + 10, 3))
+        );
+        assert_eq!(
+            log_pos_to_screen_with_side(
+                LogPos { row: 0, col: 10 },
+                &m,
+                lines(&rows),
+                1,
+                WrapCaretSide::NextRow,
+            ),
+            Some((2 + 7, 3 + 1))
         );
     }
 

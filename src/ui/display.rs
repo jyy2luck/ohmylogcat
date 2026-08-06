@@ -1,5 +1,17 @@
 //! Display helpers for long log lines (lazy wrap, visible slices).
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WrapCaretSide {
+    PreviousRow,
+    NextRow,
+}
+
+impl Default for WrapCaretSide {
+    fn default() -> Self {
+        Self::NextRow
+    }
+}
+
 pub fn effective_hang_indent(indent: usize, width: usize) -> usize {
     if indent == 0 || indent >= width {
         0
@@ -94,28 +106,39 @@ pub fn wrap_display_text(chunk: &str, logical_start: usize, indent: usize, width
 /// Which wrap display row (0-based within entry) contains logical column `col`.
 /// `col == line_len` (the line-end gap) maps to the final chunk's row.
 pub fn wrap_display_row_for_col(s: &str, width: usize, indent: usize, col: usize) -> usize {
+    wrap_display_row_for_col_with_side(s, width, indent, col, WrapCaretSide::NextRow)
+}
+
+/// Which wrap display row contains logical column `col`, honoring the visual
+/// side of an internal chunk-boundary gap.
+pub fn wrap_display_row_for_col_with_side(
+    s: &str,
+    width: usize,
+    indent: usize,
+    col: usize,
+    side: WrapCaretSide,
+) -> usize {
     if s.is_empty() {
         return 0;
     }
-    let total = s.chars().count();
-    // The line-end gap sits on the final chunk's row.
-    if col >= total {
-        return wrap_line_count(s, width, indent).saturating_sub(1);
-    }
-    for (i, (start, chunk)) in WrapChunks::with_indent(s, width, indent).enumerate() {
-        let len = chunk.chars().count();
-        if len == 0 {
-            continue;
-        }
-        if col >= start && col < start + len {
-            return i;
-        }
-    }
-    wrap_line_count(s, width, indent).saturating_sub(1)
+    let (chunk, _, _) = wrap_chunk_at_col_with_side(s, width, indent, col, side);
+    chunk
 }
 
 /// Info about the wrap chunk containing logical column `col`: (row_index, chunk_start, chunk_len).
 pub fn wrap_chunk_at_col(s: &str, width: usize, indent: usize, col: usize) -> (usize, usize, usize) {
+    wrap_chunk_at_col_with_side(s, width, indent, col, WrapCaretSide::NextRow)
+}
+
+/// Info about the wrap chunk containing logical column `col`, honoring the
+/// visual side of an internal chunk-boundary gap.
+pub fn wrap_chunk_at_col_with_side(
+    s: &str,
+    width: usize,
+    indent: usize,
+    col: usize,
+    side: WrapCaretSide,
+) -> (usize, usize, usize) {
     if s.is_empty() {
         return (0, 0, 0);
     }
@@ -127,6 +150,9 @@ pub fn wrap_chunk_at_col(s: &str, width: usize, indent: usize, col: usize) -> (u
             continue;
         }
         if col >= start && col < start + len {
+            return (i, start, len);
+        }
+        if side == WrapCaretSide::PreviousRow && col == start + len {
             return (i, start, len);
         }
     }
@@ -146,7 +172,19 @@ pub fn wrap_chunk_by_index(s: &str, width: usize, indent: usize, index: usize) -
 
 /// Screen column within the wrap display row that contains logical column `col`.
 pub fn wrap_display_col(s: &str, width: usize, indent: usize, col: usize) -> usize {
-    let (_, chunk_start, _) = wrap_chunk_at_col(s, width, indent, col);
+    wrap_display_col_with_side(s, width, indent, col, WrapCaretSide::NextRow)
+}
+
+/// Screen column within the wrap display row that contains logical column
+/// `col`, honoring the visual side of an internal chunk-boundary gap.
+pub fn wrap_display_col_with_side(
+    s: &str,
+    width: usize,
+    indent: usize,
+    col: usize,
+    side: WrapCaretSide,
+) -> usize {
+    let (_, chunk_start, _) = wrap_chunk_at_col_with_side(s, width, indent, col, side);
     let hang = effective_hang_indent(indent, width);
     if chunk_start > 0 && hang > 0 {
         hang + col.saturating_sub(chunk_start)
@@ -163,9 +201,27 @@ pub fn wrap_logical_col_from_display(
     chunk_index: usize,
     display_col: usize,
 ) -> usize {
+    let (col, side) =
+        wrap_logical_pos_from_display(s, width, indent, chunk_index, display_col);
+    if side == WrapCaretSide::PreviousRow {
+        col.saturating_sub(1)
+    } else {
+        col
+    }
+}
+
+/// Logical column and visual side for a screen column on wrap display row
+/// `chunk_index`.
+pub fn wrap_logical_pos_from_display(
+    s: &str,
+    width: usize,
+    indent: usize,
+    chunk_index: usize,
+    display_col: usize,
+) -> (usize, WrapCaretSide) {
     let (_, chunk_start, chunk_len) = wrap_chunk_by_index(s, width, indent, chunk_index);
     if chunk_len == 0 {
-        return chunk_start;
+        return (chunk_start, WrapCaretSide::NextRow);
     }
     let hang = effective_hang_indent(indent, width);
     let offset_in_chunk = if chunk_start > 0 && hang > 0 {
@@ -177,12 +233,13 @@ pub fn wrap_logical_col_from_display(
     // intermediate chunks are full, so clamp to their last character.
     let total = s.chars().count();
     let is_final_chunk = chunk_start + chunk_len == total;
-    let max_offset = if is_final_chunk {
-        chunk_len
+    if is_final_chunk {
+        (chunk_start + offset_in_chunk.min(chunk_len), WrapCaretSide::NextRow)
+    } else if offset_in_chunk >= chunk_len {
+        (chunk_start + chunk_len, WrapCaretSide::PreviousRow)
     } else {
-        chunk_len.saturating_sub(1)
-    };
-    chunk_start + offset_in_chunk.min(max_offset)
+        (chunk_start + offset_in_chunk, WrapCaretSide::NextRow)
+    }
 }
 
 /// Visible slice: skip `col_offset` chars, take at most `max_width` chars.
@@ -281,6 +338,39 @@ mod tests {
         // Logical cols 8 and 11 both sit at display column 8 on their respective rows.
         assert_eq!(wrap_display_col(s, width, indent, 8), 8);
         assert_eq!(wrap_display_col(s, width, indent, 11), 8);
+        assert_eq!(wrap_display_row_for_col(s, width, indent, 8), 0);
+    }
+
+    #[test]
+    fn wrap_boundary_side_maps_both_visual_positions() {
+        let s = "0123456789ABCDEF";
+        let width = 10;
+
+        assert_eq!(
+            wrap_display_row_for_col_with_side(s, width, 0, 10, WrapCaretSide::PreviousRow),
+            0
+        );
+        assert_eq!(
+            wrap_display_row_for_col_with_side(s, width, 0, 10, WrapCaretSide::NextRow),
+            1
+        );
+        assert_eq!(
+            wrap_display_col_with_side(s, width, 0, 10, WrapCaretSide::PreviousRow),
+            10
+        );
+        assert_eq!(
+            wrap_display_col_with_side(s, width, 0, 10, WrapCaretSide::NextRow),
+            0
+        );
+        assert_eq!(
+            wrap_logical_pos_from_display(s, width, 0, 0, 10),
+            (10, WrapCaretSide::PreviousRow)
+        );
+        assert_eq!(wrap_logical_col_from_display(s, width, 0, 0, 10), 9);
+        assert_eq!(
+            wrap_logical_pos_from_display(s, width, 0, 1, 0),
+            (10, WrapCaretSide::NextRow)
+        );
     }
 
     #[test]

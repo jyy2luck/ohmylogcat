@@ -7,13 +7,14 @@ use crate::settings::{
     load_settings, save_settings, BufferPreset, BufferStats, Settings,
 };
 use crate::ui::{
-    clamp_log_pos, expand_line, expand_word, format_log_line, line_spans, log_pos_to_screen,
-    message_column_indent, mouse_to_log_pos, reset_pointer_shape, set_pointer_shape,
-    step_caret_horizontal, str_display_width, visible_chars, effective_hang_indent,
-    wrap_chunk_at_col, wrap_display_col, wrap_display_row_for_col,
-    wrap_display_text, wrap_line_count, wrap_logical_col_from_display,
-    FindState, LanguagePreference, Locale, LogPos, PointerShape, TextInput, TextSelection, Theme,
-    UiStrings, ViewportMap, WrapChunks, TEXT_INPUT_CURSOR_STYLE,
+    clamp_log_pos, expand_line, expand_word, format_log_line, line_spans,
+    log_pos_to_screen_with_side, message_column_indent, mouse_to_log_pos,
+    reset_pointer_shape, set_pointer_shape, step_caret_horizontal, str_display_width,
+    visible_chars, effective_hang_indent, wrap_chunk_at_col_with_side, wrap_display_col_with_side,
+    wrap_display_row_for_col_with_side, wrap_display_text, wrap_line_count,
+    wrap_logical_pos_from_display, FindState, LanguagePreference, Locale, LogPos, PointerShape,
+    TextInput, TextSelection, Theme, UiStrings, ViewportMap, WrapCaretSide, WrapChunks,
+    TEXT_INPUT_CURSOR_STYLE,
 };
 use crossterm::cursor::SetCursorStyle;
 use crossterm::execute;
@@ -183,6 +184,12 @@ enum ToolbarHit {
     Settings,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CaretTarget {
+    pos: LogPos,
+    side: WrapCaretSide,
+}
+
 pub struct OhmylogcatApp {
     _rt: Runtime,
     engine: Arc<Engine>,
@@ -228,6 +235,8 @@ pub struct OhmylogcatApp {
     selection: TextSelection,
     /// Caret in the filtered log list; independent of selection endpoints.
     caret: Option<LogPos>,
+    /// Visual side for an internal Soft-Wrap boundary gap.
+    caret_wrap_side: WrapCaretSide,
     /// Preferred display column for Up/Down navigation.
     caret_preferred_col: usize,
     last_click_time: Option<Instant>,
@@ -283,6 +292,7 @@ impl OhmylogcatApp {
             hit_map: HitMap::default(),
             selection: TextSelection::default(),
             caret: None,
+            caret_wrap_side: WrapCaretSide::NextRow,
             caret_preferred_col: 0,
             last_click_time: None,
             last_click_screen: None,
@@ -782,15 +792,13 @@ impl OhmylogcatApp {
                 if let Some(pos) = self.mouse_to_log_pos(col, row) {
                     if self.selection.dragging() {
                         self.selection.extend_to(pos);
-                        self.caret = Some(pos);
-                        self.caret_preferred_col = self.display_col_of(pos);
+                        self.place_caret_direct(pos);
                     } else if self.hit_map.log_viewport.is_some_and(|r| contains(r, col, row)) {
                         // Only start a fresh drag from empty selection; keep
                         // word/line multi-click ranges intact on micro-moves.
                         if !self.selection.has_extent() {
                             self.selection.start(pos);
-                            self.caret = Some(pos);
-                            self.caret_preferred_col = self.display_col_of(pos);
+                            self.place_caret_direct(pos);
                             self.focus = Focus::Logs;
                         }
                     }
@@ -830,8 +838,7 @@ impl OhmylogcatApp {
                 self.select_line_at(pos);
             }
             _ => {
-                self.caret = Some(pos);
-                self.caret_preferred_col = self.display_col_of(pos);
+                self.place_caret_direct(pos);
                 self.selection.clear();
                 self.selection.start(pos);
             }
@@ -875,8 +882,7 @@ impl OhmylogcatApp {
             col: end,
         };
         self.selection.set_range(anchor, cursor);
-        self.caret = Some(cursor);
-        self.caret_preferred_col = self.display_col_of(cursor);
+        self.place_caret_direct(cursor);
     }
 
     fn select_line_at(&mut self, pos: LogPos) {
@@ -893,8 +899,7 @@ impl OhmylogcatApp {
             col: end,
         };
         self.selection.set_range(anchor, cursor);
-        self.caret = Some(cursor);
-        self.caret_preferred_col = self.display_col_of(cursor);
+        self.place_caret_direct(cursor);
     }
 
     fn mouse_to_log_pos(&self, col: u16, row: u16) -> Option<LogPos> {
@@ -1018,7 +1023,13 @@ impl OhmylogcatApp {
             return None;
         }
         let map = self.viewport_map(area);
-        log_pos_to_screen(caret, &map, |idx| self.formatted_line_at(idx), row_count)
+        log_pos_to_screen_with_side(
+            caret,
+            &map,
+            |idx| self.formatted_line_at(idx),
+            row_count,
+            self.caret_wrap_side,
+        )
     }
 
     pub fn restore_pointer(&mut self) {
@@ -1091,6 +1102,7 @@ impl OhmylogcatApp {
         self.wrap_skip = 0;
         self.selection.clear();
         self.caret = None;
+        self.caret_wrap_side = WrapCaretSide::NextRow;
         self.caret_preferred_col = 0;
         if self.find.open {
             self.find.recompute(&self.engine);
@@ -1101,6 +1113,7 @@ impl OhmylogcatApp {
         let n = self.engine.filtered_len();
         if n == 0 {
             self.caret = None;
+            self.caret_wrap_side = WrapCaretSide::NextRow;
             return;
         }
         let seeding = self.caret.is_none();
@@ -1112,19 +1125,76 @@ impl OhmylogcatApp {
             },
         };
         self.caret = clamp_log_pos(pos, n, |idx| self.formatted_line_at(idx));
+        if let Some(c) = self.caret {
+            self.caret_wrap_side = self.normalized_caret_side(c, self.caret_wrap_side);
+        } else {
+            self.caret_wrap_side = WrapCaretSide::NextRow;
+        }
         if seeding {
             if let Some(c) = self.caret {
-                self.caret_preferred_col = self.display_col_of(c);
+                self.caret_preferred_col = self.display_col_of(c, self.caret_wrap_side);
             }
         }
     }
 
-    fn display_col_of(&self, pos: LogPos) -> usize {
+    fn normalized_caret_side(&self, pos: LogPos, side: WrapCaretSide) -> WrapCaretSide {
+        if !self.soft_wrap || side != WrapCaretSide::PreviousRow || pos.col == 0 {
+            return WrapCaretSide::NextRow;
+        }
+        let line = self.formatted_line_at(pos.row).unwrap_or_default();
+        let line_len = line.chars().count();
+        if pos.col >= line_len {
+            return WrapCaretSide::NextRow;
+        }
+        let width = self.viewport_width.max(1);
+        let indent = self.entry_indent_at(pos.row);
+        let (_, chunk_start, chunk_len) =
+            wrap_chunk_at_col_with_side(&line, width, indent, pos.col, side);
+        if chunk_start + chunk_len == pos.col {
+            WrapCaretSide::PreviousRow
+        } else {
+            WrapCaretSide::NextRow
+        }
+    }
+
+    fn normalize_caret_side_in_place(&mut self) {
+        self.caret_wrap_side = match self.caret {
+            Some(pos) => self.normalized_caret_side(pos, self.caret_wrap_side),
+            None => WrapCaretSide::NextRow,
+        };
+    }
+
+    fn place_caret_direct(&mut self, pos: LogPos) {
+        self.caret = Some(pos);
+        self.caret_wrap_side = WrapCaretSide::NextRow;
+        self.caret_preferred_col = self.display_col_of(pos, self.caret_wrap_side);
+    }
+
+    fn is_caret_boundary(&self, pos: LogPos, side: WrapCaretSide) -> bool {
+        if !self.soft_wrap || pos.col == 0 {
+            return false;
+        }
+        let line = self.formatted_line_at(pos.row).unwrap_or_default();
+        let line_len = line.chars().count();
+        if pos.col >= line_len {
+            return false;
+        }
+        let width = self.viewport_width.max(1);
+        let indent = self.entry_indent_at(pos.row);
+        let (_, chunk_start, chunk_len) =
+            wrap_chunk_at_col_with_side(&line, width, indent, pos.col, side);
+        match side {
+            WrapCaretSide::PreviousRow => chunk_start + chunk_len == pos.col,
+            WrapCaretSide::NextRow => chunk_start == pos.col,
+        }
+    }
+
+    fn display_col_of(&self, pos: LogPos, side: WrapCaretSide) -> usize {
         if self.soft_wrap {
             let line = self.formatted_line_at(pos.row).unwrap_or_default();
             let width = self.viewport_width.max(1);
             let indent = self.entry_indent_at(pos.row);
-            wrap_display_col(&line, width, indent, pos.col)
+            wrap_display_col_with_side(&line, width, indent, pos.col, side)
         } else {
             pos.col
         }
@@ -1141,18 +1211,27 @@ impl OhmylogcatApp {
         preferred.min(len)
     }
 
-    fn apply_caret_move(&mut self, old: LogPos, new: LogPos, extend: bool) {
+    fn apply_caret_move(
+        &mut self,
+        old: LogPos,
+        new: LogPos,
+        side: WrapCaretSide,
+        extend: bool,
+    ) {
         if extend {
-            if !self.selection.has_extent() {
-                self.selection.set_range(old, new);
-            } else {
-                self.selection.extend_to(new);
+            if old != new {
+                if !self.selection.has_extent() {
+                    self.selection.set_range(old, new);
+                } else {
+                    self.selection.extend_to(new);
+                }
             }
         } else {
             self.selection.clear();
         }
         self.caret = Some(new);
-        self.caret_preferred_col = self.display_col_of(new);
+        self.caret_wrap_side = self.normalized_caret_side(new, side);
+        self.caret_preferred_col = self.display_col_of(new, self.caret_wrap_side);
         self.ensure_caret_visible();
         self.disable_follow_if_needed();
     }
@@ -1162,10 +1241,24 @@ impl OhmylogcatApp {
         let Some(old) = self.caret else {
             return;
         };
+        if delta > 0
+            && self.caret_wrap_side == WrapCaretSide::PreviousRow
+            && self.is_caret_boundary(old, WrapCaretSide::PreviousRow)
+        {
+            self.apply_caret_move(old, old, WrapCaretSide::NextRow, extend);
+            return;
+        }
+        if delta < 0
+            && self.caret_wrap_side == WrapCaretSide::NextRow
+            && self.is_caret_boundary(old, WrapCaretSide::NextRow)
+        {
+            self.apply_caret_move(old, old, WrapCaretSide::PreviousRow, extend);
+            return;
+        }
         let n = self.engine.filtered_len();
         let new = step_caret_horizontal(old, delta, n, |row| self.line_len_at(row));
         if new != old || extend {
-            self.apply_caret_move(old, new, extend);
+            self.apply_caret_move(old, new, WrapCaretSide::NextRow, extend);
         } else {
             self.ensure_caret_visible();
         }
@@ -1176,37 +1269,65 @@ impl OhmylogcatApp {
         let Some(old) = self.caret else {
             return;
         };
-        let col = if self.soft_wrap {
+        let target = if self.soft_wrap {
             // Home/End move within the current wrap chunk so the caret stays on
             // its display row instead of jumping across the whole logical line.
             let line = self.formatted_line_at(old.row).unwrap_or_default();
             let width = self.viewport_width.max(1);
             let indent = self.entry_indent_at(old.row);
             let line_len = self.line_len_at(old.row);
-            // `wrap_chunk_at_col` returns the chunk whose row `old.col` renders on
-            // (the boundary gap col == chunk_end belongs to the *next* chunk's
-            // row, matching `log_pos_to_screen_wrapped` / `mouse_to_log_pos_wrapped`).
-            let (_, chunk_start, chunk_len) = wrap_chunk_at_col(&line, width, indent, old.col);
+            let (_, chunk_start, chunk_len) = wrap_chunk_at_col_with_side(
+                &line,
+                width,
+                indent,
+                old.col,
+                self.caret_wrap_side,
+            );
             let chunk_end = chunk_start + chunk_len;
             let is_final_chunk = chunk_end == line_len;
             if home {
-                chunk_start
+                CaretTarget {
+                    pos: LogPos {
+                        row: old.row,
+                        col: chunk_start,
+                    },
+                    side: WrapCaretSide::NextRow,
+                }
             } else if is_final_chunk {
-                // Final chunk: the line-end gap (== line_len) sits on this row.
-                chunk_end
+                CaretTarget {
+                    pos: LogPos {
+                        row: old.row,
+                        col: chunk_end,
+                    },
+                    side: WrapCaretSide::NextRow,
+                }
             } else {
-                // Non-final chunk: the gap after the last char belongs to the next
-                // row, so the rightmost reachable gap on this row is the last
-                // character's left gap (matches a right-edge mouse click).
-                chunk_end.saturating_sub(1)
+                CaretTarget {
+                    pos: LogPos {
+                        row: old.row,
+                        col: chunk_end,
+                    },
+                    side: WrapCaretSide::PreviousRow,
+                }
             }
         } else if home {
-            0
+            CaretTarget {
+                pos: LogPos {
+                    row: old.row,
+                    col: 0,
+                },
+                side: WrapCaretSide::NextRow,
+            }
         } else {
-            self.line_len_at(old.row)
+            CaretTarget {
+                pos: LogPos {
+                    row: old.row,
+                    col: self.line_len_at(old.row),
+                },
+                side: WrapCaretSide::NextRow,
+            }
         };
-        let new = LogPos { row: old.row, col };
-        self.apply_caret_move(old, new, extend);
+        self.apply_caret_move(old, target.pos, target.side, extend);
     }
 
     fn move_caret_vertical(&mut self, delta_rows: isize, extend: bool) {
@@ -1215,17 +1336,26 @@ impl OhmylogcatApp {
             return;
         };
         let preferred = self.caret_preferred_col;
-        let new = if self.soft_wrap {
-            self.move_caret_vertical_wrapped(old, delta_rows, preferred)
+        let target = if self.soft_wrap {
+            self.move_caret_vertical_wrapped(
+                old,
+                self.caret_wrap_side,
+                delta_rows,
+                preferred,
+            )
         } else {
-            self.move_caret_vertical_nowrap(old, delta_rows, preferred)
+            CaretTarget {
+                pos: self.move_caret_vertical_nowrap(old, delta_rows, preferred),
+                side: WrapCaretSide::NextRow,
+            }
         };
-        // `apply_caret_move` sets `caret_preferred_col = display_col_of(new)`.
+        // `apply_caret_move` sets `caret_preferred_col` from the reached
+        // display position, including its boundary side.
         // When the move reaches `preferred` the value is unchanged; when it is
         // clamped to a chunk/line boundary the preferred column is updated to
         // the reached display column, so vertical motion stays visually
         // vertical in both soft-wrap and non-soft-wrap modes.
-        self.apply_caret_move(old, new, extend);
+        self.apply_caret_move(old, target.pos, target.side, extend);
     }
 
     fn move_caret_vertical_nowrap(&self, old: LogPos, delta_rows: isize, preferred: usize) -> LogPos {
@@ -1247,18 +1377,20 @@ impl OhmylogcatApp {
     fn move_caret_vertical_wrapped(
         &self,
         old: LogPos,
+        side: WrapCaretSide,
         delta_rows: isize,
         preferred: usize,
-    ) -> LogPos {
+    ) -> CaretTarget {
         let n = self.engine.filtered_len();
         if n == 0 || delta_rows == 0 {
-            return old;
+            return CaretTarget { pos: old, side };
         }
         let width = self.viewport_width.max(1);
         let mut row = old.row;
         let line = self.formatted_line_at(row).unwrap_or_default();
         let indent = self.entry_indent_at(row);
-        let (mut chunk, _, _) = wrap_chunk_at_col(&line, width, indent, old.col);
+        let (mut chunk, _, _) =
+            wrap_chunk_at_col_with_side(&line, width, indent, old.col, side);
         if delta_rows < 0 {
             let mut left = (-delta_rows) as usize;
             while left > 0 {
@@ -1291,14 +1423,22 @@ impl OhmylogcatApp {
             }
         }
         let line_len = self.line_len_at(row);
-        let col = if line_len == 0 {
-            0
+        let target = if line_len == 0 {
+            CaretTarget {
+                pos: LogPos { row, col: 0 },
+                side: WrapCaretSide::NextRow,
+            }
         } else {
             let line = self.formatted_line_at(row).unwrap_or_default();
             let indent = self.entry_indent_at(row);
-            wrap_logical_col_from_display(&line, width, indent, chunk, preferred)
+            let (col, side) =
+                wrap_logical_pos_from_display(&line, width, indent, chunk, preferred);
+            CaretTarget {
+                pos: LogPos { row, col },
+                side,
+            }
         };
-        LogPos { row, col }
+        target
     }
 
     fn ensure_caret_visible(&mut self) {
@@ -1318,7 +1458,13 @@ impl OhmylogcatApp {
                 self.scroll_offset = caret.row;
                 let line = self.formatted_line_at(caret.row).unwrap_or_default();
                 let indent = self.entry_indent_at(caret.row);
-                self.wrap_skip = wrap_display_row_for_col(&line, width, indent, caret.col);
+                self.wrap_skip = wrap_display_row_for_col_with_side(
+                    &line,
+                    width,
+                    indent,
+                    caret.col,
+                    self.caret_wrap_side,
+                );
             } else {
                 self.scroll_offset = caret.row;
             }
@@ -1329,7 +1475,13 @@ impl OhmylogcatApp {
                 self.scroll_offset = caret.row;
                 let line = self.formatted_line_at(caret.row).unwrap_or_default();
                 let indent = self.entry_indent_at(caret.row);
-                self.wrap_skip = wrap_display_row_for_col(&line, width, indent, caret.col);
+                self.wrap_skip = wrap_display_row_for_col_with_side(
+                    &line,
+                    width,
+                    indent,
+                    caret.col,
+                    self.caret_wrap_side,
+                );
                 let up = (self.viewport_height.max(1) - 1) as isize;
                 self.scroll_by_wrapped(-up);
             } else {
@@ -1360,7 +1512,13 @@ impl OhmylogcatApp {
             let width = self.viewport_width.max(1);
             let line = self.formatted_line_at(caret.row).unwrap_or_default();
             let indent = self.entry_indent_at(caret.row);
-            wrap_display_row_for_col(&line, width, indent, caret.col) < self.wrap_skip
+            wrap_display_row_for_col_with_side(
+                &line,
+                width,
+                indent,
+                caret.col,
+                self.caret_wrap_side,
+            ) < self.wrap_skip
         } else {
             false
         }
@@ -1379,15 +1537,26 @@ impl OhmylogcatApp {
         let map = self.viewport_map(area);
         // Visible if any screen mapping exists ignoring horizontal pan.
         if self.soft_wrap {
-            log_pos_to_screen(pos, &map, |idx| self.formatted_line_at(idx), row_count).is_some()
-                || self.log_pos_on_screen_vertically_wrapped(pos)
+            log_pos_to_screen_with_side(
+                pos,
+                &map,
+                |idx| self.formatted_line_at(idx),
+                row_count,
+                self.caret_wrap_side,
+            )
+            .is_some()
+                || self.log_pos_on_screen_vertically_wrapped(pos, self.caret_wrap_side)
         } else {
             pos.row >= self.scroll_offset
                 && pos.row < self.scroll_offset + self.viewport_height.max(1)
         }
     }
 
-    fn log_pos_on_screen_vertically_wrapped(&self, pos: LogPos) -> bool {
+    fn log_pos_on_screen_vertically_wrapped(
+        &self,
+        pos: LogPos,
+        side: WrapCaretSide,
+    ) -> bool {
         let width = self.viewport_width.max(1);
         let row_count = self.engine.filtered_len();
         let mut display_row = 0usize;
@@ -1400,7 +1569,8 @@ impl OhmylogcatApp {
             if idx == pos.row {
                 let line = self.formatted_line_at(idx).unwrap_or_default();
                 let indent = self.entry_indent_at(idx);
-                let chunk = wrap_display_row_for_col(&line, width, indent, pos.col);
+                let chunk =
+                    wrap_display_row_for_col_with_side(&line, width, indent, pos.col, side);
                 if chunk >= start_chunk
                     && chunk < start_chunk + chunks_shown.min(self.viewport_height - display_row)
                 {
@@ -1425,6 +1595,7 @@ impl OhmylogcatApp {
 
     fn toggle_wrap(&mut self) {
         self.soft_wrap = !self.soft_wrap;
+        self.caret_wrap_side = WrapCaretSide::NextRow;
         if self.soft_wrap {
             self.col_offset = 0;
             self.wrap_skip = 0;
@@ -2050,6 +2221,11 @@ impl OhmylogcatApp {
         // Viewport size is only known here; re-follow when it changes so Wrap
         // mode lands on the true end of a long line (not the default 10-row math).
         if self.viewport_height != prev_h || self.viewport_width != prev_w {
+            self.normalize_caret_side_in_place();
+            if let Some(caret) = self.caret {
+                self.caret_preferred_col =
+                    self.display_col_of(caret, self.caret_wrap_side);
+            }
             self.follow_dirty = true;
         }
         self.apply_follow_scroll_if_needed();
@@ -2517,6 +2693,7 @@ mod tests {
             hit_map: HitMap::default(),
             selection: TextSelection::default(),
             caret: None,
+            caret_wrap_side: WrapCaretSide::NextRow,
             caret_preferred_col: 0,
             last_click_time: None,
             last_click_screen: None,
@@ -2567,12 +2744,14 @@ mod tests {
         let line_len = PREFIX_LEN + msg.chars().count();
         assert_eq!(line_len, 48);
 
-        // Caret on chunk 1 (col 41, inside [40,44)). End -> 43 (last char of chunk 1),
-        // not 44 (chunk_end renders on the next row's start) and not 48 (line end).
+        // Caret on chunk 1 (col 41, inside [40,44)). End -> 44 (right side of
+        // chunk 1's boundary), not 48 (line end).
         app.caret = Some(LogPos { row: 0, col: 41 });
-        app.caret_preferred_col = app.display_col_of(app.caret.unwrap());
+        app.caret_preferred_col =
+            app.display_col_of(app.caret.unwrap(), app.caret_wrap_side);
         app.move_caret_line_bound(false, false);
-        assert_eq!(app.caret, Some(LogPos { row: 0, col: 43 }));
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 44 }));
+        assert_eq!(app.caret_wrap_side, WrapCaretSide::PreviousRow);
         // End on the final chunk (col 45, inside [44,48)) -> 48 == line_len (no regression).
         app.caret = Some(LogPos { row: 0, col: 45 });
         app.move_caret_line_bound(false, false);
@@ -2600,8 +2779,8 @@ mod tests {
     #[test]
     fn soft_wrap_end_on_first_chunk_stays_on_first_row() {
         // Regression: End on the first display row of a wrapped line must not
-        // jump to the continuation row's start. col 40 (chunk0 end) renders on
-        // row 1, so End on chunk 0 must land on col 39 (last char of chunk 0).
+        // jump to the continuation row's start. It must land after the last
+        // character on the first row at the shared chunk boundary.
         let mut app = build_app();
         app.soft_wrap = true;
         app.viewport_width = 40;
@@ -2609,13 +2788,123 @@ mod tests {
         seed(&mut app, &[entry(msg)]);
         let line = app.formatted_line_at(0).unwrap();
 
-        let before = wrap_display_row_for_col(&line, 40, 36, 30);
+        let before =
+            wrap_display_row_for_col_with_side(&line, 40, 36, 30, WrapCaretSide::NextRow);
         app.caret = Some(LogPos { row: 0, col: 30 });
         app.move_caret_line_bound(false, false);
-        let after = wrap_display_row_for_col(&line, 40, 36, app.caret.unwrap().col);
-        assert_eq!(app.caret, Some(LogPos { row: 0, col: 39 }));
+        let after = wrap_display_row_for_col_with_side(
+            &line,
+            40,
+            36,
+            app.caret.unwrap().col,
+            app.caret_wrap_side,
+        );
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 40 }));
         assert_eq!(before, 0, "caret started on row 0");
         assert_eq!(after, 0, "End must keep caret on row 0, not jump to row 1");
+    }
+
+    #[test]
+    fn soft_wrap_boundary_horizontal_moves_in_two_visual_steps() {
+        let mut app = build_app();
+        app.soft_wrap = true;
+        app.viewport_width = 40;
+        seed(&mut app, &[entry("0123456789AB")]);
+
+        app.caret = Some(LogPos { row: 0, col: 30 });
+        app.move_caret_line_bound(false, false);
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 40 }));
+        assert_eq!(app.caret_wrap_side, WrapCaretSide::PreviousRow);
+
+        app.move_caret_horizontal(1, false);
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 40 }));
+        assert_eq!(app.caret_wrap_side, WrapCaretSide::NextRow);
+
+        app.move_caret_horizontal(1, false);
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 41 }));
+        assert_eq!(app.caret_wrap_side, WrapCaretSide::NextRow);
+
+        app.move_caret_horizontal(-1, false);
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 40 }));
+        assert_eq!(app.caret_wrap_side, WrapCaretSide::NextRow);
+
+        app.move_caret_horizontal(-1, false);
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 40 }));
+        assert_eq!(app.caret_wrap_side, WrapCaretSide::PreviousRow);
+    }
+
+    #[test]
+    fn soft_wrap_boundary_vertical_preserves_previous_row_side() {
+        let mut app = build_app();
+        app.soft_wrap = true;
+        app.viewport_width = 40;
+        seed(&mut app, &[entry("0123456789AB")]);
+
+        app.caret = Some(LogPos { row: 0, col: 30 });
+        app.move_caret_line_bound(false, false);
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 40 }));
+        assert_eq!(app.caret_wrap_side, WrapCaretSide::PreviousRow);
+        assert_eq!(app.caret_preferred_col, 40);
+
+        app.move_caret_vertical(1, false);
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 44 }));
+        assert_eq!(app.caret_wrap_side, WrapCaretSide::PreviousRow);
+        assert_eq!(app.caret_preferred_col, 40);
+
+        app.move_caret_vertical(-1, false);
+        assert_eq!(app.caret, Some(LogPos { row: 0, col: 40 }));
+        assert_eq!(app.caret_wrap_side, WrapCaretSide::PreviousRow);
+        assert_eq!(app.caret_preferred_col, 40);
+    }
+
+    #[test]
+    fn soft_wrap_caret_screen_pos_respects_boundary_side() {
+        let mut app = build_app();
+        app.soft_wrap = true;
+        app.viewport_width = 40;
+        app.viewport_height = 5;
+        app.hit_map.log_viewport = Some(Rect {
+            x: 2,
+            y: 3,
+            width: 40,
+            height: 5,
+        });
+        seed(&mut app, &[entry("0123456789AB")]);
+
+        app.caret = Some(LogPos { row: 0, col: 40 });
+        app.caret_wrap_side = WrapCaretSide::PreviousRow;
+        assert_eq!(app.log_caret_screen_pos(), Some((2 + 40, 3)));
+
+        app.caret_wrap_side = WrapCaretSide::NextRow;
+        assert_eq!(app.log_caret_screen_pos(), Some((2 + 36, 3 + 1)));
+    }
+
+    #[test]
+    fn soft_wrap_visual_boundary_move_keeps_logical_selection() {
+        let mut app = build_app();
+        app.soft_wrap = true;
+        app.viewport_width = 40;
+        seed(&mut app, &[entry("0123456789AB")]);
+
+        let anchor = LogPos { row: 0, col: 0 };
+        let boundary = LogPos { row: 0, col: 40 };
+        app.selection.set_range(anchor, boundary);
+        app.caret = Some(boundary);
+        app.caret_wrap_side = WrapCaretSide::PreviousRow;
+        let before = app
+            .selection
+            .extract_text(|idx| app.formatted_line_at(idx))
+            .unwrap();
+
+        app.move_caret_horizontal(1, true);
+
+        assert_eq!(app.caret, Some(boundary));
+        assert_eq!(app.caret_wrap_side, WrapCaretSide::NextRow);
+        let after = app
+            .selection
+            .extract_text(|idx| app.formatted_line_at(idx))
+            .unwrap();
+        assert_eq!(after, before);
     }
 
     #[test]
@@ -2632,7 +2921,8 @@ mod tests {
         // Level char "I" sits at logical col 31 in the prefix.
         let level_col = 31;
         app.caret = Some(LogPos { row: 0, col: level_col });
-        app.caret_preferred_col = app.display_col_of(app.caret.unwrap());
+        app.caret_preferred_col =
+            app.display_col_of(app.caret.unwrap(), app.caret_wrap_side);
         assert_eq!(app.caret_preferred_col, 31);
 
         // Down: clamp to continuation chunk start.
