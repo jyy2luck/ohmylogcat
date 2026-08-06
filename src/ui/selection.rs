@@ -57,6 +57,9 @@ impl TextSelection {
         self.dragging = false;
     }
 
+    /// Half-open range `[start, end)` ordered by gap order.
+    /// `end` is exclusive: a selection ending at `col == line_len` includes the
+    /// last character of that line.
     pub fn normalized_range(&self) -> Option<(LogPos, LogPos)> {
         match (self.anchor, self.cursor) {
             (Some(a), Some(c)) if a <= c => Some((a, c)),
@@ -77,10 +80,12 @@ impl TextSelection {
             return false;
         };
         let pos = LogPos { row, col };
-        pos >= start && pos <= end
+        pos >= start && pos < end
     }
 
-    /// Extract selected plain text from formatted log lines.
+    /// Extract selected plain text from formatted log lines using half-open
+    /// endpoints `[start, end)`. A selection whose end gap is `col == line_len`
+    /// includes the last character of that line.
     pub fn extract_text(&self, line_at: impl Fn(usize) -> Option<String>) -> Option<String> {
         let (start, end) = self.normalized_range()?;
         let mut out = String::new();
@@ -94,20 +99,20 @@ impl TextSelection {
                 continue;
             }
             let from = if row == start.row {
-                start.col.min(chars.len() - 1)
+                start.col.min(chars.len())
             } else {
                 0
             };
             let to = if row == end.row {
-                end.col.min(chars.len() - 1)
+                end.col.min(chars.len())
             } else {
-                chars.len() - 1
+                chars.len()
             };
             if row > start.row {
                 out.push('\n');
             }
-            if from <= to {
-                out.extend(chars[from..=to].iter());
+            if from < to {
+                out.extend(chars[from..to].iter());
             }
         }
         if out.is_empty() {
@@ -168,7 +173,10 @@ fn mouse_to_log_pos_nowrap(
         return Some(LogPos { row: log_row, col: 0 });
     }
     let col_in = (col.saturating_sub(map.area.x)) as usize;
-    let char_col = (map.col_offset + col_in).min(line_len - 1);
+    let target = map.col_offset + col_in;
+    // Click within a cell maps to that cell's left gap; clicking past the last
+    // character maps to the line-end gap (col == line_len).
+    let char_col = if target >= line_len { line_len } else { target };
     Some(LogPos {
         row: log_row,
         col: char_col,
@@ -216,7 +224,19 @@ fn mouse_to_log_pos_wrapped(
                 if chunk_len == 0 {
                     return Some(LogPos { row: idx, col: chunk_start });
                 }
-                let col_in_chunk = content_col.min(chunk_len - 1);
+                let total = line.chars().count();
+                let is_final_chunk = chunk_start + chunk_len == total;
+                // Click within a cell maps to that cell's left gap; past the last
+                // char of the final chunk maps to the line-end gap.
+                let col_in_chunk = if content_col >= chunk_len {
+                    if is_final_chunk {
+                        chunk_len
+                    } else {
+                        chunk_len - 1
+                    }
+                } else {
+                    content_col
+                };
                 return Some(LogPos {
                     row: idx,
                     col: chunk_start + col_in_chunk,
@@ -263,16 +283,20 @@ fn log_pos_to_screen_nowrap(
     }
     let line = line_at(pos.row)?;
     let line_len = line.chars().count();
-    let col = if line_len == 0 {
-        0
-    } else {
-        pos.col.min(line_len - 1)
-    };
+    let col = pos.col.min(line_len);
     if col < map.col_offset {
         return None;
     }
     let col_in = col - map.col_offset;
-    if col_in >= map.viewport_width.max(1) {
+    let width = map.viewport_width.max(1);
+    // A real character (col < line_len) is visible only when col_in < width.
+    // The line-end gap (col == line_len) may sit at col_in == width (right edge
+    // of the last cell when the line fills the viewport); terminals allow a
+    // cursor column equal to the viewport width.
+    if col_in > width {
+        return None;
+    }
+    if col_in == width && col != line_len {
         return None;
     }
     let x = map.area.x.saturating_add(col_in as u16);
@@ -316,10 +340,30 @@ fn log_pos_to_screen_wrapped(
                 continue;
             }
             let chunk_chars = chunk.chars().count();
-            let chunk_end = chunk_start + chunk_chars.saturating_sub(1);
-            if idx == pos.row && pos.col >= chunk_start && pos.col <= chunk_end {
+            let chunk_end = chunk_start + chunk_chars;
+            // The line-end gap (col == line_len) belongs to the final chunk.
+            let is_final_chunk = chunk_end == line_len;
+            let in_chunk = if is_final_chunk {
+                pos.col >= chunk_start && pos.col <= chunk_end
+            } else {
+                pos.col >= chunk_start && pos.col < chunk_end
+            };
+            if idx == pos.row && in_chunk {
                 let is_continuation = chunk_start > 0 && hang > 0;
-                let col_in = (pos.col - chunk_start).min(chunk_chars.saturating_sub(1));
+                let col_in = (pos.col - chunk_start).min(chunk_chars);
+                let cap = if is_continuation {
+                    width - hang
+                } else {
+                    width
+                };
+                // Line-end gap on a chunk that fills the available width sits at
+                // col_in == cap (right edge); allow it.
+                if col_in > cap {
+                    return None;
+                }
+                if col_in == cap && pos.col != chunk_end {
+                    return None;
+                }
                 let screen_x_offset = if is_continuation {
                     hang + col_in
                 } else {
@@ -344,7 +388,8 @@ pub fn is_word_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
 }
 
-/// Inclusive `[start, end]` columns for the word (or single non-word char) at `col`.
+/// Half-open `[start, end_exclusive)` columns for the word (or single non-word
+/// char) at `col`. An empty line returns `(0, 0)` (zero-width selection).
 pub fn expand_word(line: &str, col: usize) -> (usize, usize) {
     let chars: Vec<char> = line.chars().collect();
     if chars.is_empty() {
@@ -352,7 +397,7 @@ pub fn expand_word(line: &str, col: usize) -> (usize, usize) {
     }
     let col = col.min(chars.len() - 1);
     if !is_word_char(chars[col]) {
-        return (col, col);
+        return (col, col + 1);
     }
     let mut start = col;
     while start > 0 && is_word_char(chars[start - 1]) {
@@ -362,17 +407,14 @@ pub fn expand_word(line: &str, col: usize) -> (usize, usize) {
     while end + 1 < chars.len() && is_word_char(chars[end + 1]) {
         end += 1;
     }
-    (start, end)
+    (start, end + 1)
 }
 
-/// Inclusive columns covering the whole logical line.
+/// Half-open columns covering the whole logical line: `(0, line_len)`.
+/// An empty line returns `(0, 0)`.
 pub fn expand_line(line: &str) -> (usize, usize) {
     let len = line.chars().count();
-    if len == 0 {
-        (0, 0)
-    } else {
-        (0, len - 1)
-    }
+    (0, len)
 }
 
 /// Clamp a caret into a valid position for the filtered list.
@@ -387,7 +429,7 @@ pub fn clamp_log_pos(
     let row = pos.row.min(row_count - 1);
     let line = line_at(row)?;
     let len = line.chars().count();
-    let col = if len == 0 { 0 } else { pos.col.min(len - 1) };
+    let col = pos.col.min(len);
     Some(LogPos { row, col })
 }
 
@@ -408,16 +450,11 @@ pub fn step_caret_horizontal(
             col -= 1;
         } else if row > 0 {
             row -= 1;
-            col = line_len_at(row).saturating_sub(1);
+            col = line_len_at(row);
         }
     } else {
         let len = line_len_at(row);
-        if len == 0 {
-            if row + 1 < row_count {
-                row += 1;
-                col = 0;
-            }
-        } else if col + 1 < len {
+        if col < len {
             col += 1;
         } else if row + 1 < row_count {
             row += 1;
@@ -622,7 +659,7 @@ mod tests {
         let theme = Theme::dark_accents();
         let mut sel = TextSelection::default();
         sel.start(LogPos { row: 0, col: 10 });
-        sel.extend_to(LogPos { row: 0, col: 12 });
+        sel.extend_to(LogPos { row: 0, col: 13 });
 
         let spans = line_spans(
             "   abc",
@@ -678,7 +715,7 @@ mod tests {
     fn extract_text_joins_lines() {
         let mut sel = TextSelection::default();
         sel.start(LogPos { row: 0, col: 0 });
-        sel.extend_to(LogPos { row: 1, col: 2 });
+        sel.extend_to(LogPos { row: 1, col: 3 });
         let text = sel
             .extract_text(|row| match row {
                 0 => Some("hello".into()),
@@ -761,14 +798,14 @@ mod tests {
 
     #[test]
     fn expand_word_identifier_and_non_word() {
-        assert_eq!(expand_word("foo MyApp_1 bar", 6), (4, 10));
-        assert_eq!(expand_word("a=b", 1), (1, 1));
+        assert_eq!(expand_word("foo MyApp_1 bar", 6), (4, 11));
+        assert_eq!(expand_word("a=b", 1), (1, 2));
         assert_eq!(expand_word("", 0), (0, 0));
     }
 
     #[test]
     fn expand_line_covers_full_text() {
-        assert_eq!(expand_line("hello"), (0, 4));
+        assert_eq!(expand_line("hello"), (0, 5));
         assert_eq!(expand_line(""), (0, 0));
     }
 
@@ -777,7 +814,7 @@ mod tests {
         let rows = ["ab", "cdef"];
         assert_eq!(
             clamp_log_pos(LogPos { row: 9, col: 99 }, 2, lines(&rows)),
-            Some(LogPos { row: 1, col: 3 })
+            Some(LogPos { row: 1, col: 4 })
         );
         assert_eq!(clamp_log_pos(LogPos { row: 0, col: 0 }, 0, lines(&rows)), None);
     }
@@ -790,15 +827,25 @@ mod tests {
             2 => 0,
             _ => 0,
         };
-        // Right from end of line 0 -> start of line 1
+        // Right within line 0 (gap before last char -> line-end gap)
         assert_eq!(
             step_caret_horizontal(LogPos { row: 0, col: 2 }, 1, 3, lens),
+            LogPos { row: 0, col: 3 }
+        );
+        // Right from line-end gap of line 0 -> start of line 1
+        assert_eq!(
+            step_caret_horizontal(LogPos { row: 0, col: 3 }, 1, 3, lens),
             LogPos { row: 1, col: 0 }
         );
-        // Left from start of line 1 -> end of line 0
+        // Right at end of last line stays at line-end gap
+        assert_eq!(
+            step_caret_horizontal(LogPos { row: 2, col: 0 }, 1, 3, lens),
+            LogPos { row: 2, col: 0 }
+        );
+        // Left from start of line 1 -> line-end gap of line 0
         assert_eq!(
             step_caret_horizontal(LogPos { row: 1, col: 0 }, -1, 3, lens),
-            LogPos { row: 0, col: 2 }
+            LogPos { row: 0, col: 3 }
         );
         // Empty buffer: unchanged
         assert_eq!(
@@ -809,6 +856,155 @@ mod tests {
         assert_eq!(
             step_caret_horizontal(LogPos { row: 0, col: 0 }, -1, 3, lens),
             LogPos { row: 0, col: 0 }
+        );
+    }
+
+    #[test]
+    fn extract_text_half_open_single_char() {
+        let mut sel = TextSelection::default();
+        sel.start(LogPos { row: 0, col: 2 });
+        sel.extend_to(LogPos { row: 0, col: 3 });
+        let text = sel
+            .extract_text(|row| match row {
+                0 => Some("hello".into()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(text, "l");
+    }
+
+    #[test]
+    fn extract_text_half_open_full_line() {
+        let mut sel = TextSelection::default();
+        sel.start(LogPos { row: 0, col: 0 });
+        sel.extend_to(LogPos { row: 0, col: 5 });
+        let text = sel
+            .extract_text(|row| match row {
+                0 => Some("hello".into()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn extract_text_half_open_multiline_end_at_len() {
+        let mut sel = TextSelection::default();
+        sel.start(LogPos { row: 0, col: 0 });
+        sel.extend_to(LogPos { row: 1, col: 5 });
+        let text = sel
+            .extract_text(|row| match row {
+                0 => Some("hello".into()),
+                1 => Some("world".into()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(text, "hello\nworld");
+    }
+
+    #[test]
+    fn extract_text_shift_end_includes_last_char() {
+        // Simulates Shift+End selecting through the last character: anchor at
+        // col 0, caret at line_len. The last char must be included.
+        let mut sel = TextSelection::default();
+        sel.start(LogPos { row: 0, col: 0 });
+        sel.extend_to(LogPos { row: 0, col: 5 });
+        let text = sel
+            .extract_text(|row| match row {
+                0 => Some("hello".into()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(text, "hello");
+        // contains uses strict upper bound: col 5 (line_len) is NOT in selection,
+        // but col 4 (last char) IS.
+        assert!(!sel.contains(0, 5));
+        assert!(sel.contains(0, 4));
+    }
+
+    #[test]
+    fn log_pos_to_screen_nowrap_line_end_gap() {
+        let rows = ["abc"];
+        let m = map(false, 0, 0, 0);
+        // col == line_len (3) maps to the right edge of the last char.
+        assert_eq!(
+            log_pos_to_screen(LogPos { row: 0, col: 3 }, &m, lines(&rows), 1),
+            Some((2 + 3, 3))
+        );
+    }
+
+    #[test]
+    fn log_pos_to_screen_nowrap_full_width_line_guard() {
+        // Line fills the viewport exactly (width 10, line_len 10): the line-end
+        // gap sits at col_in == width (one past the last visible cell).
+        let rows = ["0123456789"];
+        let m = map(false, 0, 0, 0);
+        assert_eq!(
+            log_pos_to_screen(LogPos { row: 0, col: 10 }, &m, lines(&rows), 1),
+            Some((2 + 10, 3))
+        );
+        // A real char at col 10 doesn't exist; col 9 (last char) is visible.
+        assert_eq!(
+            log_pos_to_screen(LogPos { row: 0, col: 9 }, &m, lines(&rows), 1),
+            Some((2 + 9, 3))
+        );
+    }
+
+    #[test]
+    fn log_pos_to_screen_wrapped_line_end_gap() {
+        // width 10: "0123456789ABCDEF" -> chunk0 "0123456789", chunk1 "ABCDEF".
+        // Line-end gap (col 16) belongs to the final chunk's end.
+        let rows = ["0123456789ABCDEF"];
+        let m = map(true, 0, 0, 0);
+        assert_eq!(
+            log_pos_to_screen(LogPos { row: 0, col: 16 }, &m, lines(&rows), 1),
+            Some((2 + 6, 3 + 1))
+        );
+    }
+
+    #[test]
+    fn log_pos_to_screen_wrapped_full_width_chunk_guard() {
+        // Final chunk fills the available width exactly: line-end gap at the
+        // right edge. "0123456789AB" -> chunk0 "0123456789" (10), chunk1 "AB" (2).
+        let rows = ["0123456789AB"];
+        let m = map(true, 0, 0, 0);
+        // col 12 == line_len, final chunk "AB" (start 10, len 2), col_in = 2.
+        assert_eq!(
+            log_pos_to_screen(LogPos { row: 0, col: 12 }, &m, lines(&rows), 1),
+            Some((2 + 2, 3 + 1))
+        );
+    }
+
+    #[test]
+    fn mouse_to_log_pos_nowrap_past_last_char_is_line_end_gap() {
+        let rows = ["abc"];
+        let m = map(false, 0, 0, 0);
+        // Click on the last char (screen col 2) -> left gap (col 2).
+        assert_eq!(
+            mouse_to_log_pos(2 + 2, 3, &m, lines(&rows), 1),
+            Some(LogPos { row: 0, col: 2 })
+        );
+        // Click past the last char (screen col 3) -> line-end gap (col 3).
+        assert_eq!(
+            mouse_to_log_pos(2 + 3, 3, &m, lines(&rows), 1),
+            Some(LogPos { row: 0, col: 3 })
+        );
+    }
+
+    #[test]
+    fn mouse_to_log_pos_wrapped_past_last_char_is_line_end_gap() {
+        // "0123456789ABCDEF" width 10: chunk0 row 0, chunk1 "ABCDEF" row 1.
+        let rows = ["0123456789ABCDEF"];
+        let m = map(true, 0, 0, 0);
+        // Click on the last char of chunk1 ('F' at screen col 5) -> left gap (col 15).
+        assert_eq!(
+            mouse_to_log_pos(2 + 5, 3 + 1, &m, lines(&rows), 1),
+            Some(LogPos { row: 0, col: 15 })
+        );
+        // Click past the last char (screen col 6) -> line-end gap (col 16).
+        assert_eq!(
+            mouse_to_log_pos(2 + 6, 3 + 1, &m, lines(&rows), 1),
+            Some(LogPos { row: 0, col: 16 })
         );
     }
 }

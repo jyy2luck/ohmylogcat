@@ -1138,11 +1138,7 @@ impl OhmylogcatApp {
 
     fn clamp_col_for_row(&self, row: usize, preferred: usize) -> usize {
         let len = self.line_len_at(row);
-        if len == 0 {
-            0
-        } else {
-            preferred.min(len - 1)
-        }
+        preferred.min(len)
     }
 
     fn apply_caret_move(&mut self, old: LogPos, new: LogPos, extend: bool) {
@@ -1183,7 +1179,7 @@ impl OhmylogcatApp {
         let col = if home {
             0
         } else {
-            self.line_len_at(old.row).saturating_sub(1)
+            self.line_len_at(old.row)
         };
         let new = LogPos { row: old.row, col };
         self.apply_caret_move(old, new, extend);
@@ -1321,7 +1317,7 @@ impl OhmylogcatApp {
             let w = self.viewport_width.max(1);
             if caret.col < self.col_offset {
                 self.col_offset = caret.col;
-            } else if caret.col >= self.col_offset + w {
+            } else if caret.col > self.col_offset + w {
                 self.col_offset = caret.col + 1 - w;
             }
         }

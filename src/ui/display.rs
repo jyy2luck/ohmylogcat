@@ -92,9 +92,15 @@ pub fn wrap_display_text(chunk: &str, logical_start: usize, indent: usize, width
 }
 
 /// Which wrap display row (0-based within entry) contains logical column `col`.
+/// `col == line_len` (the line-end gap) maps to the final chunk's row.
 pub fn wrap_display_row_for_col(s: &str, width: usize, indent: usize, col: usize) -> usize {
     if s.is_empty() {
         return 0;
+    }
+    let total = s.chars().count();
+    // The line-end gap sits on the final chunk's row.
+    if col >= total {
+        return wrap_line_count(s, width, indent).saturating_sub(1);
     }
     for (i, (start, chunk)) in WrapChunks::with_indent(s, width, indent).enumerate() {
         let len = chunk.chars().count();
@@ -167,7 +173,16 @@ pub fn wrap_logical_col_from_display(
     } else {
         display_col
     };
-    chunk_start + offset_in_chunk.min(chunk_len - 1)
+    // The line-end gap (offset == chunk_len) is only valid on the final chunk;
+    // intermediate chunks are full, so clamp to their last character.
+    let total = s.chars().count();
+    let is_final_chunk = chunk_start + chunk_len == total;
+    let max_offset = if is_final_chunk {
+        chunk_len
+    } else {
+        chunk_len.saturating_sub(1)
+    };
+    chunk_start + offset_in_chunk.min(max_offset)
 }
 
 /// Visible slice: skip `col_offset` chars, take at most `max_width` chars.
