@@ -17,6 +17,21 @@ const INSTALL_PS1_URL: &str =
     "https://raw.githubusercontent.com/jyy2luck/ohmylogcat/main/install.ps1";
 const RELEASES_API: &str =
     "https://api.github.com/repos/jyy2luck/ohmylogcat/releases/latest";
+const INSTALL_RESULT_PREFIX: &str = "ohmylogcat-install-result:";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstallResult {
+    Installed,
+    Scheduled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UpdateOutcome {
+    Scheduled,
+    AlreadyUpToDate(String),
+    Updated(String),
+    InstalledUnverified(String),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliAction {
@@ -199,20 +214,32 @@ fn run_update() -> Result<(), i32> {
     }
 
     println!("Updating ohmylogcat via install script...");
-    invoke_install_script().map_err(|e| {
+    let install_result = invoke_install_script().map_err(|e| {
         eprintln!("error: {e}");
         1
     })?;
 
-    match fetch_latest_release_version() {
-        Ok(latest) if latest == PKG_VERSION => {
+    if install_result == InstallResult::Scheduled {
+        println!(
+            "Update scheduled; the replacement will complete after the running process exits."
+        );
+        return Ok(());
+    }
+
+    match select_update_outcome(install_result, fetch_latest_release_version()) {
+        UpdateOutcome::Scheduled => {
+            println!(
+                "Update scheduled; the replacement will complete after the running process exits."
+            );
+        }
+        UpdateOutcome::AlreadyUpToDate(latest) => {
             println!("Already up to date ({latest}).");
         }
-        Ok(latest) => {
+        UpdateOutcome::Updated(latest) => {
             println!("Updated toward latest release ({latest}). Restart any open sessions.");
         }
-        Err(e) => {
-            eprintln!("warning: could not verify latest release version: {e}");
+        UpdateOutcome::InstalledUnverified(error) => {
+            eprintln!("warning: could not verify latest release version: {error}");
             println!("Install script finished. Run `ohmylogcat --version` to confirm.");
         }
     }
@@ -380,10 +407,10 @@ fn normalize_path_string(path: &Path) -> String {
         .to_string()
 }
 
-fn invoke_install_script() -> Result<(), String> {
+fn invoke_install_script() -> Result<InstallResult, String> {
     #[cfg(windows)]
     {
-        let status = Command::new("powershell")
+        let output = Command::new("powershell")
             .args([
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -391,13 +418,30 @@ fn invoke_install_script() -> Result<(), String> {
                 "-Command",
                 &format!("irm {INSTALL_PS1_URL} | iex"),
             ])
-            .status()
+            .output()
             .map_err(|e| format!("failed to run PowerShell: {e}"))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("install script exited with {status}"))
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        print!("{stdout}");
+        eprint!("{stderr}");
+
+        if !output.status.success() {
+            let detail = if stderr.trim().is_empty() {
+                stdout.trim()
+            } else {
+                stderr.trim()
+            };
+            if detail.is_empty() {
+                return Err(format!("install script exited with {}", output.status));
+            }
+            return Err(format!(
+                "install script exited with {}: {detail}",
+                output.status
+            ));
         }
+
+        let combined = format!("{stdout}{stderr}");
+        Ok(parse_install_result(&combined).unwrap_or(InstallResult::Installed))
     }
     #[cfg(not(windows))]
     {
@@ -406,10 +450,36 @@ fn invoke_install_script() -> Result<(), String> {
             .status()
             .map_err(|e| format!("failed to run install script: {e}"))?;
         if status.success() {
-            Ok(())
+            Ok(InstallResult::Installed)
         } else {
             Err(format!("install script exited with {status}"))
         }
+    }
+}
+
+fn parse_install_result(output: &str) -> Option<InstallResult> {
+    output.lines().rev().find_map(|line| {
+        let result = line.trim().strip_prefix(INSTALL_RESULT_PREFIX)?.trim();
+        match result {
+            "installed" => Some(InstallResult::Installed),
+            "scheduled" => Some(InstallResult::Scheduled),
+            _ => None,
+        }
+    })
+}
+
+fn select_update_outcome(
+    install_result: InstallResult,
+    latest: Result<String, String>,
+) -> UpdateOutcome {
+    if install_result == InstallResult::Scheduled {
+        return UpdateOutcome::Scheduled;
+    }
+
+    match latest {
+        Ok(latest) if latest == PKG_VERSION => UpdateOutcome::AlreadyUpToDate(latest),
+        Ok(latest) => UpdateOutcome::Updated(latest),
+        Err(error) => UpdateOutcome::InstalledUnverified(error),
     }
 }
 
@@ -640,6 +710,49 @@ mod tests {
         assert_eq!(
             extract_json_string_field(json, "tag_name").as_deref(),
             Some("v0.1.0")
+        );
+    }
+
+    #[test]
+    fn parse_install_result_markers() {
+        assert_eq!(
+            parse_install_result("Installed to path\nohmylogcat-install-result: installed\n"),
+            Some(InstallResult::Installed)
+        );
+        assert_eq!(
+            parse_install_result("Update scheduled\nohmylogcat-install-result: scheduled\n"),
+            Some(InstallResult::Scheduled)
+        );
+        assert_eq!(
+            parse_install_result("installer output without marker"),
+            None
+        );
+    }
+
+    #[test]
+    fn scheduled_install_takes_precedence_over_version_message() {
+        assert_eq!(
+            select_update_outcome(InstallResult::Scheduled, Ok(PKG_VERSION.to_string())),
+            UpdateOutcome::Scheduled
+        );
+    }
+
+    #[test]
+    fn installed_result_selects_version_message() {
+        assert_eq!(
+            select_update_outcome(InstallResult::Installed, Ok(PKG_VERSION.to_string())),
+            UpdateOutcome::AlreadyUpToDate(PKG_VERSION.to_string())
+        );
+        assert_eq!(
+            select_update_outcome(InstallResult::Installed, Ok("9.9.9".to_string())),
+            UpdateOutcome::Updated("9.9.9".to_string())
+        );
+        assert_eq!(
+            select_update_outcome(
+                InstallResult::Installed,
+                Err("network unavailable".to_string())
+            ),
+            UpdateOutcome::InstalledUnverified("network unavailable".to_string())
         );
     }
 }

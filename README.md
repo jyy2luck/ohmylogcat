@@ -87,6 +87,15 @@ $env:INSTALL_DIR = "$env:LOCALAPPDATA\Tools\ohmylogcat"
 irm https://raw.githubusercontent.com/jyy2luck/ohmylogcat/main/install.ps1 | iex
 ```
 
+When `ohmylogcat update` is run while the current Windows executable is still
+running, the installer prints a `scheduled` result and exits successfully. A
+detached helper waits for the executable to become available, then replaces it
+without requiring a restart. Close all running Oh My Logcat processes to let
+the helper finish; the installer prints the temporary status-log path for
+diagnostics. If the retry deadline is reached, the existing executable is
+preserved and the status log identifies the staged file so the update can be
+retried after the lock is released.
+
 If the script cannot be used, download `ohmylogcat-x86_64-pc-windows-msvc.zip` from the [latest release](https://github.com/jyy2luck/ohmylogcat/releases/latest) and put `ohmylogcat.exe` on your `PATH`.
 
 ### Linux
@@ -122,6 +131,13 @@ Uninstall options:
 - `--purge`: delete `settings.json` without prompting to keep it.
 
 `update` and `uninstall` operate on installations created by `install.sh` or `install.ps1` (`~/.local/bin`, `%LOCALAPPDATA%\ohmylogcat`, or `INSTALL_DIR`). For Cargo installations, use `cargo install --force` and `cargo uninstall ohmylogcat`.
+
+On Windows, an unlocked update reports `installed` and completes before the
+command exits. If the running executable is locked, `update` reports that the
+replacement was scheduled; it does not claim that the new version is already
+installed. The detached helper completes after the process exits, or writes a
+failure status with the preserved executable and temporary staged path when
+its bounded retries are exhausted.
 
 ## Prerequisites
 
