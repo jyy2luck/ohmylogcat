@@ -572,6 +572,7 @@ fn resolve_latest_release_location(url: &str) -> Result<String, String> {
     }
 }
 
+#[cfg(any(not(windows), test))]
 fn location_header_value(headers: &str) -> Option<String> {
     for line in headers.lines() {
         let line = line.trim();

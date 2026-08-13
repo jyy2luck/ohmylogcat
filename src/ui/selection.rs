@@ -253,6 +253,7 @@ fn mouse_to_log_pos_wrapped(
 }
 
 /// Map a log caret position to a screen cell. Returns `None` when off-screen.
+#[cfg(test)]
 pub fn log_pos_to_screen(
     pos: LogPos,
     map: &ViewportMap,

@@ -105,6 +105,7 @@ pub fn wrap_display_text(chunk: &str, logical_start: usize, indent: usize, width
 
 /// Which wrap display row (0-based within entry) contains logical column `col`.
 /// `col == line_len` (the line-end gap) maps to the final chunk's row.
+#[cfg(test)]
 pub fn wrap_display_row_for_col(s: &str, width: usize, indent: usize, col: usize) -> usize {
     wrap_display_row_for_col_with_side(s, width, indent, col, WrapCaretSide::NextRow)
 }
@@ -126,6 +127,7 @@ pub fn wrap_display_row_for_col_with_side(
 }
 
 /// Info about the wrap chunk containing logical column `col`: (row_index, chunk_start, chunk_len).
+#[cfg(test)]
 pub fn wrap_chunk_at_col(s: &str, width: usize, indent: usize, col: usize) -> (usize, usize, usize) {
     wrap_chunk_at_col_with_side(s, width, indent, col, WrapCaretSide::NextRow)
 }
@@ -171,6 +173,7 @@ pub fn wrap_chunk_by_index(s: &str, width: usize, indent: usize, index: usize) -
 }
 
 /// Screen column within the wrap display row that contains logical column `col`.
+#[cfg(test)]
 pub fn wrap_display_col(s: &str, width: usize, indent: usize, col: usize) -> usize {
     wrap_display_col_with_side(s, width, indent, col, WrapCaretSide::NextRow)
 }
@@ -194,6 +197,7 @@ pub fn wrap_display_col_with_side(
 }
 
 /// Logical column for a screen column on wrap display row `chunk_index`.
+#[cfg(test)]
 pub fn wrap_logical_col_from_display(
     s: &str,
     width: usize,
