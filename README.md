@@ -193,7 +193,8 @@ The TUI and engine run in one process. The engine reads and parses ADB output, s
 | `w` | Logs | Toggle Soft-Wrap |
 | `t` / `m` | Logs, top layer | Open the Tag or Message filter modal |
 | `l` / `Tab` | Logs / Level | Focus the Level filter |
-| `/` or Ctrl/Cmd+F | Logs | Open Find |
+| `/` | Logs | Open or focus Find with the cursor at the end |
+| `Ctrl/Cmd+F` | Logs, Level, Find | Focus Find and select the current query |
 | `n` / `N` | Find open | Go to the next or previous match |
 | `Enter` / `Shift+Enter` | Find open | Go to the next or previous match |
 | `←` `↑` `↓` `→` | Logs | Move the caret and keep it visible |

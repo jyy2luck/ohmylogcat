@@ -409,6 +409,14 @@ impl OhmylogcatApp {
             return;
         }
 
+        if key.code == KeyCode::Char('f')
+            && (key.modifiers.contains(KeyModifiers::CONTROL)
+                || key.modifiers.contains(KeyModifiers::SUPER))
+        {
+            self.activate_find();
+            return;
+        }
+
         match self.focus {
             Focus::Logs => self.handle_logs_key(key),
             Focus::Level => self.handle_level_key(key),
@@ -418,15 +426,6 @@ impl OhmylogcatApp {
     }
 
     fn handle_logs_key(&mut self, key: KeyEvent) {
-        // Ctrl/Cmd+F
-        if key.code == KeyCode::Char('f')
-            && (key.modifiers.contains(KeyModifiers::CONTROL)
-                || key.modifiers.contains(KeyModifiers::SUPER))
-        {
-            self.open_find();
-            return;
-        }
-
         match key.code {
             KeyCode::Char(' ') => self.toggle_pause(),
             KeyCode::Char('c')
@@ -744,6 +743,7 @@ impl OhmylogcatApp {
                     if contains(r, col, row) {
                         self.find.input.cursor =
                             TextInput::cursor_from_click(col, r.x, &self.find.input.text);
+                        self.find.input.select_all = false;
                         self.focus = Focus::Find;
                         return;
                     }
@@ -1042,6 +1042,14 @@ impl OhmylogcatApp {
     fn open_find(&mut self) {
         self.find.open_bar();
         self.focus = Focus::Find;
+    }
+
+    fn activate_find(&mut self) {
+        if !self.find.open {
+            self.find.open_bar();
+        }
+        self.focus = Focus::Find;
+        self.find.input.select_all();
     }
 
     fn open_devices(&mut self) {
@@ -2193,6 +2201,8 @@ impl OhmylogcatApp {
         let query = &self.find.input.text;
         let prefix = self.ui.find_prefix;
         let suffix = format!("] {counter}{}", self.ui.find_help_suffix);
+        let query_selected =
+            self.focus == Focus::Find && self.find.input.select_all && !query.is_empty();
         let value_width = str_display_width(query).max(1);
         let prefix_width = str_display_width(prefix);
         let value_start_col = area.x.saturating_add(prefix_width);
@@ -2204,12 +2214,29 @@ impl OhmylogcatApp {
         });
 
         if self.focus == Focus::Find {
-            let cursor_x = value_start_col.saturating_add(self.find.input.display_width_before_cursor());
+            let cursor_width = if query_selected {
+                str_display_width(query)
+            } else {
+                self.find.input.display_width_before_cursor()
+            };
+            let cursor_x = value_start_col.saturating_add(cursor_width);
             frame.set_cursor_position((cursor_x, area.y));
         }
 
-        let text = format!("{prefix}{query}{suffix}");
-        frame.render_widget(Paragraph::new(Span::styled(text, style)), area);
+        let query_style = if query_selected {
+            Style::default()
+                .fg(self.theme.selection_fg)
+                .bg(self.theme.selection_bg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            style
+        };
+        let line = Line::from(vec![
+            Span::styled(prefix, style),
+            Span::styled(query, query_style),
+            Span::styled(suffix, style),
+        ]);
+        frame.render_widget(Paragraph::new(line), area);
     }
 
     fn draw_logs(&mut self, frame: &mut Frame, area: Rect) {
@@ -2980,5 +3007,98 @@ mod tests {
         app.move_caret_vertical(1, false);
         assert_eq!(app.caret, Some(LogPos { row: 1, col: 20 }));
         assert_eq!(app.caret_preferred_col, 20, "preferred preserved across equal lines");
+    }
+
+    fn ctrl_f() -> KeyEvent {
+        KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn ctrl_f_focuses_find_and_selects_query_from_each_shell_focus() {
+        for focus in [Focus::Logs, Focus::Find, Focus::Level] {
+            let mut app = build_app();
+            app.find.input.text = "needle".into();
+            app.find.input.cursor = 2;
+            app.find.open = focus == Focus::Find;
+            app.focus = focus;
+
+            app.handle_key(ctrl_f());
+
+            assert_eq!(app.focus, Focus::Find);
+            assert!(app.find.open);
+            assert!(app.find.input.select_all);
+        }
+    }
+
+    #[test]
+    fn slash_from_logs_focuses_find_without_selecting_query() {
+        let mut app = build_app();
+        app.find.open = true;
+        app.find.input.text = "needle".into();
+        app.find.input.cursor = 2;
+        app.find.input.select_all = true;
+        app.focus = Focus::Logs;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::empty()));
+
+        assert_eq!(app.focus, Focus::Find);
+        assert_eq!(app.find.input.cursor, "needle".chars().count());
+        assert!(!app.find.input.select_all);
+    }
+
+    #[test]
+    fn ctrl_f_does_not_steal_focus_from_modal() {
+        let mut app = build_app();
+        app.modal = Some(ModalKind::FilterEdit {
+            field: FilterField::Tag,
+        });
+        app.focus = Focus::Modal;
+
+        app.handle_key(ctrl_f());
+
+        assert_eq!(
+            app.modal,
+            Some(ModalKind::FilterEdit {
+                field: FilterField::Tag
+            })
+        );
+        assert_eq!(app.focus, Focus::Modal);
+        assert!(!app.find.open);
+    }
+
+    #[test]
+    fn enter_advances_match_without_clearing_find_selection() {
+        let mut app = build_app();
+        seed(&mut app, &[entry("foo"), entry("foo again")]);
+        app.find.open = true;
+        app.focus = Focus::Find;
+        app.find.input.text = "foo".into();
+        app.find.input.set_cursor_end();
+        app.find.recompute(&app.engine);
+        app.find.input.select_all();
+
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+        assert_eq!(app.find.current, 1);
+        assert!(app.find.input.select_all);
+    }
+
+    #[test]
+    fn typing_after_ctrl_f_replaces_query_and_recomputes_matches() {
+        let mut app = build_app();
+        seed(&mut app, &[entry("foo"), entry("bar"), entry("baz")]);
+        app.find.open = true;
+        app.focus = Focus::Find;
+        app.find.input.text = "foo".into();
+        app.find.input.set_cursor_end();
+        app.find.recompute(&app.engine);
+        assert_eq!(app.find.matches.len(), 1);
+
+        app.handle_key(ctrl_f());
+        app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::empty()));
+
+        assert_eq!(app.find.input.text, "b");
+        assert!(!app.find.input.select_all);
+        assert_eq!(app.find.matches.len(), 2);
     }
 }

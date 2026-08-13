@@ -17,6 +17,7 @@ pub fn str_display_width(s: &str) -> u16 {
 pub struct TextInput {
     pub text: String,
     pub cursor: usize,
+    pub select_all: bool,
 }
 
 impl TextInput {
@@ -28,8 +29,47 @@ impl TextInput {
         self.cursor = self.text.chars().count();
     }
 
+    pub fn select_all(&mut self) {
+        self.cursor = self.text.chars().count();
+        self.select_all = true;
+    }
+
     /// Handle editing keys. Returns `true` when `text` changed.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
+        if self.select_all {
+            match key.code {
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::SUPER) =>
+                {
+                    self.text.clear();
+                    self.cursor = 0;
+                    self.select_all = false;
+                    self.text.push(c);
+                    self.cursor = 1;
+                    return true;
+                }
+                KeyCode::Backspace | KeyCode::Delete => {
+                    let changed = !self.text.is_empty();
+                    self.text.clear();
+                    self.cursor = 0;
+                    self.select_all = false;
+                    return changed;
+                }
+                KeyCode::Left | KeyCode::Home => {
+                    self.cursor = 0;
+                    self.select_all = false;
+                    return false;
+                }
+                KeyCode::Right | KeyCode::End => {
+                    self.set_cursor_end();
+                    self.select_all = false;
+                    return false;
+                }
+                _ => {}
+            }
+        }
+
         match key.code {
             KeyCode::Left => {
                 if self.cursor > 0 {
@@ -131,7 +171,11 @@ mod tests {
 
     fn from_text(text: String) -> TextInput {
         let cursor = text.chars().count();
-        TextInput { text, cursor }
+        TextInput {
+            text,
+            cursor,
+            select_all: false,
+        }
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -140,6 +184,56 @@ mod tests {
 
     fn char_key(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty())
+    }
+
+    #[test]
+    fn select_all_replaces_on_type() {
+        let mut input = from_text("abc".into());
+        input.select_all();
+
+        assert!(input.handle_key(char_key('X')));
+        assert_eq!(input.text, "X");
+        assert_eq!(input.cursor, 1);
+        assert!(!input.select_all);
+    }
+
+    #[test]
+    fn select_all_clears_on_backspace_and_delete() {
+        for code in [KeyCode::Backspace, KeyCode::Delete] {
+            let mut input = from_text("abc".into());
+            input.select_all();
+
+            assert!(input.handle_key(key(code)));
+            assert!(input.text.is_empty());
+            assert_eq!(input.cursor, 0);
+            assert!(!input.select_all);
+        }
+    }
+
+    #[test]
+    fn select_all_collapses_on_arrows_without_changing_text() {
+        let mut input = from_text("abc".into());
+        input.select_all();
+
+        assert!(!input.handle_key(key(KeyCode::Left)));
+        assert_eq!(input.text, "abc");
+        assert_eq!(input.cursor, 0);
+        assert!(!input.select_all);
+
+        input.select_all();
+        assert!(!input.handle_key(key(KeyCode::Right)));
+        assert_eq!(input.text, "abc");
+        assert_eq!(input.cursor, 3);
+        assert!(!input.select_all);
+    }
+
+    #[test]
+    fn selecting_empty_input_has_no_display_width() {
+        let mut input = TextInput::new();
+        input.select_all();
+
+        assert_eq!(input.display_width_before_cursor(), 0);
+        assert_eq!(input.cursor, 0);
     }
 
     #[test]

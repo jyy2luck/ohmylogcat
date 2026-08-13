@@ -15,6 +15,7 @@ impl FindState {
     pub fn open_bar(&mut self) {
         self.open = true;
         self.input.set_cursor_end();
+        self.input.select_all = false;
     }
 
     pub fn close(&mut self) {
