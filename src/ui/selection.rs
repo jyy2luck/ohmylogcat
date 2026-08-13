@@ -512,7 +512,6 @@ pub fn line_spans(
     }
 
     let chars: Vec<char> = text.chars().collect();
-    let logical_len = chars.len().saturating_sub(display_pad);
     let lower: Vec<char> = if find_q.is_empty() {
         Vec::new()
     } else {
@@ -528,7 +527,6 @@ pub fn line_spans(
             log_row,
             line_char_start,
             display_pad,
-            logical_len,
             i,
         );
 
@@ -563,7 +561,6 @@ pub fn line_spans(
                 log_row,
                 line_char_start,
                 display_pad,
-                logical_len,
                 j,
             );
             if sel_j != selected {
@@ -600,14 +597,11 @@ fn is_display_selected(
     log_row: usize,
     line_char_start: usize,
     display_pad: usize,
-    logical_len: usize,
     display_i: usize,
 ) -> bool {
     if display_i < display_pad {
-        if logical_len == 0 {
-            return selection.contains(log_row, line_char_start);
-        }
-        (line_char_start..line_char_start + logical_len).any(|c| selection.contains(log_row, c))
+        // Hang pad follows the chunk-start gap (downward includes it, upward omits it).
+        selection.contains(log_row, line_char_start)
     } else {
         selection.contains(log_row, line_char_start + (display_i - display_pad))
     }
@@ -720,6 +714,60 @@ mod tests {
 
         assert_eq!(spans.len(), 1);
         assert_ne!(spans[0].style.bg, Some(theme.selection_bg));
+    }
+
+    #[test]
+    fn line_spans_hang_indent_pad_not_selected_when_selecting_upward() {
+        let theme = Theme::dark_accents();
+        let mut sel = TextSelection::default();
+        // Caret moved up into this continuation chunk: [11, 13) excludes chunk start.
+        sel.start(LogPos { row: 0, col: 13 });
+        sel.extend_to(LogPos { row: 0, col: 11 });
+
+        let spans = line_spans(
+            "   abc",
+            0,
+            10,
+            3,
+            Color::White,
+            &theme,
+            &sel,
+            "",
+            false,
+        );
+
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].content, "   a");
+        assert_ne!(spans[0].style.bg, Some(theme.selection_bg));
+        assert_eq!(spans[1].content, "bc");
+        assert_eq!(spans[1].style.bg, Some(theme.selection_bg));
+    }
+
+    #[test]
+    fn line_spans_hang_indent_pad_selected_when_selecting_downward() {
+        let theme = Theme::dark_accents();
+        let mut sel = TextSelection::default();
+        // Caret moved down into this continuation chunk: [10, 12) includes chunk start.
+        sel.start(LogPos { row: 0, col: 10 });
+        sel.extend_to(LogPos { row: 0, col: 12 });
+
+        let spans = line_spans(
+            "   abc",
+            0,
+            10,
+            3,
+            Color::White,
+            &theme,
+            &sel,
+            "",
+            false,
+        );
+
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].content, "   ab");
+        assert_eq!(spans[0].style.bg, Some(theme.selection_bg));
+        assert_eq!(spans[1].content, "c");
+        assert_ne!(spans[1].style.bg, Some(theme.selection_bg));
     }
 
     #[test]
