@@ -397,7 +397,7 @@ impl OhmylogcatApp {
         }
 
         if self.is_top_layer()
-            && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q'))
+            && is_letter_shortcut(&key, 'q')
             && !key.modifiers.contains(KeyModifiers::CONTROL)
         {
             self.should_quit = true;
@@ -409,7 +409,7 @@ impl OhmylogcatApp {
             return;
         }
 
-        if key.code == KeyCode::Char('f')
+        if is_letter_shortcut(&key, 'f')
             && (key.modifiers.contains(KeyModifiers::CONTROL)
                 || key.modifiers.contains(KeyModifiers::SUPER))
         {
@@ -428,31 +428,32 @@ impl OhmylogcatApp {
     fn handle_logs_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char(' ') => self.toggle_pause(),
-            KeyCode::Char('c')
-                if !key.modifiers.intersects(
-                    KeyModifiers::CONTROL | KeyModifiers::SUPER | KeyModifiers::META,
-                ) =>
+            KeyCode::Char(_)
+                if is_letter_shortcut(&key, 'c')
+                    && !key.modifiers.intersects(
+                        KeyModifiers::CONTROL | KeyModifiers::SUPER | KeyModifiers::META,
+                    ) =>
             {
                 self.clear_logs();
             }
-            KeyCode::Char('f') => self.toggle_follow(),
-            KeyCode::Char('d') => self.open_devices(),
-            KeyCode::Char('e') => {
+            KeyCode::Char(_) if is_letter_shortcut(&key, 'f') => self.toggle_follow(),
+            KeyCode::Char(_) if is_letter_shortcut(&key, 'd') => self.open_devices(),
+            KeyCode::Char(_) if is_letter_shortcut(&key, 'e') => {
                 self.modal = Some(ModalKind::ExportMenu);
                 self.focus = Focus::Modal;
             }
-            KeyCode::Char('s') => self.open_settings(),
-            KeyCode::Char('w') => self.toggle_wrap(),
+            KeyCode::Char(_) if is_letter_shortcut(&key, 's') => self.open_settings(),
+            KeyCode::Char(_) if is_letter_shortcut(&key, 'w') => self.toggle_wrap(),
             KeyCode::Char('/') => self.open_find(),
             KeyCode::Char('n') if self.find.open => self.find.next(),
             KeyCode::Char('N') if self.find.open => self.find.prev(),
-            KeyCode::Char('t') if self.is_top_layer() => {
+            KeyCode::Char(_) if is_letter_shortcut(&key, 't') && self.is_top_layer() => {
                 self.open_filter_edit(FilterField::Tag);
             }
-            KeyCode::Char('m') if self.is_top_layer() => {
+            KeyCode::Char(_) if is_letter_shortcut(&key, 'm') && self.is_top_layer() => {
                 self.open_filter_edit(FilterField::Message);
             }
-            KeyCode::Char('l') => {
+            KeyCode::Char(_) if is_letter_shortcut(&key, 'l') => {
                 self.focus = Focus::Level;
             }
             KeyCode::Tab => self.focus = Focus::Level,
@@ -487,10 +488,20 @@ impl OhmylogcatApp {
             KeyCode::Esc | KeyCode::Enter => self.focus = Focus::Logs,
             KeyCode::Tab => self.focus = Focus::Logs,
             KeyCode::BackTab => self.focus = Focus::Logs,
-            KeyCode::Left | KeyCode::Up | KeyCode::Char('h') | KeyCode::Char('k') => {
+            KeyCode::Left | KeyCode::Up => {
                 self.cycle_level(false);
             }
-            KeyCode::Right | KeyCode::Down | KeyCode::Char('l') | KeyCode::Char('j') | KeyCode::Char(' ') => {
+            KeyCode::Char(_)
+                if is_letter_shortcut(&key, 'h') || is_letter_shortcut(&key, 'k') =>
+            {
+                self.cycle_level(false);
+            }
+            KeyCode::Right | KeyCode::Down | KeyCode::Char(' ') => {
+                self.cycle_level(true);
+            }
+            KeyCode::Char(_)
+                if is_letter_shortcut(&key, 'l') || is_letter_shortcut(&key, 'j') =>
+            {
                 self.cycle_level(true);
             }
             _ => {}
@@ -562,18 +573,29 @@ impl OhmylogcatApp {
     fn handle_devices_modal_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => self.close_modal(),
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 if self.device_cursor > 0 {
                     self.device_cursor -= 1;
                 }
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Char(_) if is_letter_shortcut(&key, 'k') => {
+                if self.device_cursor > 0 {
+                    self.device_cursor -= 1;
+                }
+            }
+            KeyCode::Down => {
                 let max = self.devices.len(); // +1 for (none)
                 if self.device_cursor < max {
                     self.device_cursor += 1;
                 }
             }
-            KeyCode::Char('r') => self.refresh_devices(),
+            KeyCode::Char(_) if is_letter_shortcut(&key, 'j') => {
+                let max = self.devices.len(); // +1 for (none)
+                if self.device_cursor < max {
+                    self.device_cursor += 1;
+                }
+            }
+            KeyCode::Char(_) if is_letter_shortcut(&key, 'r') => self.refresh_devices(),
             KeyCode::Enter => {
                 if self.device_cursor == 0 {
                     self.selected_serial = None;
@@ -591,10 +613,16 @@ impl OhmylogcatApp {
     fn handle_export_menu_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => self.close_modal(),
-            KeyCode::Char('1') | KeyCode::Char('f') => {
+            KeyCode::Char('1') => {
                 self.open_export(true);
             }
-            KeyCode::Char('2') | KeyCode::Char('a') => {
+            KeyCode::Char(_) if is_letter_shortcut(&key, 'f') => {
+                self.open_export(true);
+            }
+            KeyCode::Char('2') => {
+                self.open_export(false);
+            }
+            KeyCode::Char(_) if is_letter_shortcut(&key, 'a') => {
                 self.open_export(false);
             }
             _ => {}
@@ -695,9 +723,9 @@ impl OhmylogcatApp {
                         if self.settings_panel.adb_editing {
                             self.settings_panel.adb_path.push(c);
                             self.commit_settings_from_panel();
-                        } else if c == 'e' {
+                        } else if is_letter_shortcut(&key, 'e') {
                             self.settings_panel.adb_editing = true;
-                        } else if c == 'r' {
+                        } else if is_letter_shortcut(&key, 'r') {
                             self.settings_panel.adb_path.clear();
                             self.commit_settings_from_panel();
                         }
@@ -2584,8 +2612,17 @@ impl OhmylogcatApp {
     }
 }
 
+fn is_letter_shortcut(key: &KeyEvent, expected: char) -> bool {
+    let KeyCode::Char(actual) = key.code else {
+        return false;
+    };
+    actual.is_ascii_alphabetic()
+        && expected.is_ascii_alphabetic()
+        && actual.to_ascii_lowercase() == expected.to_ascii_lowercase()
+}
+
 fn is_copy_shortcut(key: &KeyEvent) -> bool {
-    if !matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
+    if !is_letter_shortcut(key, 'c') {
         return false;
     }
     let m = key.modifiers;
@@ -3014,6 +3051,73 @@ mod tests {
     }
 
     #[test]
+    fn letter_shortcut_matches_only_ascii_letters_case_insensitively() {
+        assert!(is_letter_shortcut(
+            &KeyEvent::new(KeyCode::Char('f'), KeyModifiers::empty()),
+            'f'
+        ));
+        assert!(is_letter_shortcut(
+            &KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT),
+            'f'
+        ));
+        assert!(is_letter_shortcut(
+            &KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+            'F'
+        ));
+        assert!(!is_letter_shortcut(
+            &KeyEvent::new(KeyCode::Char('1'), KeyModifiers::empty()),
+            'f'
+        ));
+        assert!(!is_letter_shortcut(
+            &KeyEvent::new(KeyCode::Char('é'), KeyModifiers::empty()),
+            'f'
+        ));
+        assert!(!is_letter_shortcut(
+            &KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+            'f'
+        ));
+        assert!(!is_letter_shortcut(
+            &KeyEvent::new(KeyCode::Char('f'), KeyModifiers::empty()),
+            '1'
+        ));
+    }
+
+    #[test]
+    fn uppercase_copy_shortcut_keeps_existing_modifier_rules() {
+        for modifiers in [
+            KeyModifiers::CONTROL,
+            KeyModifiers::SUPER,
+            KeyModifiers::META,
+        ] {
+            assert!(is_copy_shortcut(&KeyEvent::new(
+                KeyCode::Char('C'),
+                modifiers,
+            )));
+        }
+        assert!(!is_copy_shortcut(&KeyEvent::new(
+            KeyCode::Char('C'),
+            KeyModifiers::empty(),
+        )));
+        assert!(!is_copy_shortcut(&KeyEvent::new(
+            KeyCode::Char('C'),
+            KeyModifiers::SHIFT,
+        )));
+    }
+
+    #[test]
+    fn uppercase_ctrl_f_focuses_find() {
+        for modifier in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
+            let mut app = build_app();
+            app.focus = Focus::Logs;
+
+            app.handle_key(KeyEvent::new(KeyCode::Char('F'), modifier));
+
+            assert_eq!(app.focus, Focus::Find);
+            assert!(app.find.open);
+        }
+    }
+
+    #[test]
     fn ctrl_f_focuses_find_and_selects_query_from_each_shell_focus() {
         for focus in [Focus::Logs, Focus::Find, Focus::Level] {
             let mut app = build_app();
@@ -3028,6 +3132,144 @@ mod tests {
             assert!(app.find.open);
             assert!(app.find.input.select_all);
         }
+    }
+
+    #[test]
+    fn uppercase_log_shortcuts_trigger_their_actions() {
+        let mut app = build_app();
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('F'), KeyModifiers::empty()));
+        assert!(app.auto_scroll);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('W'), KeyModifiers::empty()));
+        assert!(app.soft_wrap);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::empty()));
+        assert_eq!(app.modal, Some(ModalKind::Settings));
+    }
+
+    #[test]
+    fn uppercase_q_quits_but_control_uppercase_q_does_not() {
+        let mut app = build_app();
+        app.handle_key(KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::empty()));
+        assert!(app.should_quit);
+
+        let mut app = build_app();
+        app.handle_key(KeyEvent::new(
+            KeyCode::Char('Q'),
+            KeyModifiers::CONTROL,
+        ));
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn uppercase_clear_keeps_control_modifier_restriction() {
+        let mut app = build_app();
+        seed(&mut app, &[entry("keep me")]);
+
+        app.handle_key(KeyEvent::new(
+            KeyCode::Char('C'),
+            KeyModifiers::CONTROL,
+        ));
+        assert_eq!(app.engine.filtered_len(), 1);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::empty()));
+        assert_eq!(app.engine.filtered_len(), 0);
+    }
+
+    #[test]
+    fn uppercase_level_shortcuts_cycle_in_expected_direction() {
+        let mut app = build_app();
+        app.focus = Focus::Level;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('H'), KeyModifiers::empty()));
+        assert_eq!(app.filter_level, Some(LogLevel::Fatal));
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::empty()));
+        assert_eq!(app.filter_level, None);
+    }
+
+    #[test]
+    fn uppercase_modal_shortcuts_trigger_actions() {
+        let mut app = build_app();
+        app.modal = Some(ModalKind::Devices);
+        app.focus = Focus::Modal;
+        app.device_cursor = 1;
+        app.devices.push(Device {
+            serial: "test".into(),
+            state: "device".into(),
+        });
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::empty()));
+        assert_eq!(app.device_cursor, 0);
+        app.handle_key(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::empty()));
+        assert_eq!(app.device_cursor, 1);
+
+        let before_refresh = app.last_device_refresh;
+        app.handle_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::empty()));
+        assert!(app.last_device_refresh > before_refresh);
+
+        app.modal = Some(ModalKind::ExportMenu);
+        app.handle_key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::empty()));
+        assert!(matches!(
+            app.modal,
+            Some(ModalKind::Export {
+                filtered_only: false,
+                ..
+            })
+        ));
+
+        app.modal = Some(ModalKind::Settings);
+        app.settings_panel.adb_editing = false;
+        app.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::empty()));
+        assert!(app.settings_panel.adb_editing);
+    }
+
+    #[test]
+    fn uppercase_text_is_preserved_in_find_filter_and_export_inputs() {
+        let mut app = build_app();
+        app.find.open = true;
+        app.focus = Focus::Find;
+        app.handle_key(KeyEvent::new(KeyCode::Char('F'), KeyModifiers::empty()));
+        assert_eq!(app.find.input.text, "F");
+
+        app.modal = Some(ModalKind::FilterEdit {
+            field: FilterField::Tag,
+        });
+        app.focus = Focus::Modal;
+        app.handle_key(KeyEvent::new(KeyCode::Char('T'), KeyModifiers::empty()));
+        assert_eq!(app.filter_tag.text, "T");
+
+        app.modal = Some(ModalKind::Export {
+            filtered_only: true,
+            path: String::new(),
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::empty()));
+        assert!(matches!(
+            app.modal,
+            Some(ModalKind::Export {
+                path,
+                ..
+            }) if path == "P"
+        ));
+    }
+
+    #[test]
+    fn find_navigation_keeps_lowercase_n_next_and_uppercase_n_previous() {
+        let mut app = build_app();
+        seed(&mut app, &[entry("match"), entry("match again")]);
+        app.find.open = true;
+        app.focus = Focus::Logs;
+        app.find.input.text = "match".into();
+        app.find.input.set_cursor_end();
+        app.find.recompute(&app.engine);
+        assert_eq!(app.find.matches.len(), 2);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty()));
+        assert_eq!(app.find.current, 1);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::empty()));
+        assert_eq!(app.find.current, 0);
     }
 
     #[test]

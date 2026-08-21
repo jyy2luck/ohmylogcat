@@ -179,6 +179,10 @@ The TUI and engine run in one process. The engine reads and parses ADB output, s
 
 ## Keyboard shortcuts
 
+Letter shortcuts are case-insensitive. The `n` / `N` Find navigation pair remains
+case-sensitive: `n` goes to the next match and `N` goes to the previous match.
+Text-input fields preserve the original character case.
+
 ### Main shell
 
 | Shortcut | Context | Action |
