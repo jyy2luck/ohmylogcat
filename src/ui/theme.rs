@@ -2,7 +2,7 @@ use crate::parser::LogLevel;
 use ratatui::style::Color;
 
 /// Semantic accent palette. Shell chrome inherits the terminal default;
-/// only levels, focus, selection, and find use these colors.
+/// only levels, selection, and find use these colors. Focus uses underline.
 /// Level colors come from Android Studio → Color Scheme → Android Logcat;
 /// light vs dark is chosen once at startup via host-background detection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +29,7 @@ impl Theme {
             level_info: rgb(89, 168, 105),           // #59A869
             level_warn: rgb(100, 86, 7),             // #645607
             level_error: rgb(205, 0, 0),             // #CD0000
-            ..Self::interaction_accents()
+            ..Self::interaction_accents(true)
         }
     }
 
@@ -41,7 +41,7 @@ impl Theme {
             level_info: rgb(171, 192, 35),           // #ABC023
             level_warn: rgb(187, 181, 41),           // #BBB529
             level_error: rgb(255, 107, 104),         // #FF6B68
-            ..Self::interaction_accents()
+            ..Self::interaction_accents(false)
         }
     }
 
@@ -54,19 +54,25 @@ impl Theme {
         }
     }
 
-    fn interaction_accents() -> Self {
+    /// Find stays black-on-yellow so it never blends with Info.
+    /// Focus uses underline in chrome (not this yellow fill).
+    fn interaction_accents(light: bool) -> Self {
         Self {
             level_verbose: Color::Reset,
             level_debug: Color::Reset,
             level_info: Color::Reset,
             level_warn: Color::Reset,
             level_error: Color::Reset,
-            focus_fg: Color::Black,
-            focus_bg: Color::Yellow,
+            focus_fg: Color::Reset,
+            focus_bg: Color::Reset,
             selection_fg: Color::White,
             selection_bg: Color::Blue,
             find_fg: Color::Black,
-            find_bg: Color::Yellow,
+            find_bg: if light {
+                rgb(201, 148, 0)
+            } else {
+                Color::Yellow
+            },
         }
     }
 
@@ -127,10 +133,14 @@ mod tests {
         assert_ne!(dark.level_info, light.level_info);
         assert_ne!(dark.level_error, dark.level_info);
         assert_ne!(light.level_error, light.level_info);
-        assert_eq!(dark.find_bg, light.find_bg);
         assert_eq!(dark.find_fg, Color::Black);
+        assert_eq!(light.find_fg, Color::Black);
         assert_eq!(dark.find_bg, Color::Yellow);
+        assert_eq!(light.find_bg, Color::Rgb(201, 148, 0));
+        assert_eq!(dark.focus_bg, Color::Reset);
+        assert_eq!(light.focus_bg, Color::Reset);
         assert_ne!(dark.find_bg, dark.selection_bg);
+        assert_ne!(light.find_bg, light.selection_bg);
     }
 
     #[test]

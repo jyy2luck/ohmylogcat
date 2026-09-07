@@ -508,7 +508,7 @@ pub fn line_spans(
     if find_q.is_empty() && !selection.is_active() {
         return vec![Span::styled(
             text.to_string(),
-            base_style(theme, base_color, is_find_current, false),
+            base_style(theme, base_color, false),
         )];
     }
 
@@ -579,7 +579,7 @@ pub fn line_spans(
         let run: String = chars[i..j].iter().collect();
         spans.push(Span::styled(
             run,
-            base_style(theme, base_color, is_find_current && find_q.is_empty(), selected),
+            base_style(theme, base_color, selected),
         ));
         i = j;
     }
@@ -587,7 +587,7 @@ pub fn line_spans(
     if spans.is_empty() {
         spans.push(Span::styled(
             text.to_string(),
-            base_style(theme, base_color, is_find_current, false),
+            base_style(theme, base_color, false),
         ));
     }
     spans
@@ -623,19 +623,113 @@ fn find_style(theme: &Theme, is_current: bool, selected: bool) -> Style {
     }
 }
 
-fn base_style(theme: &Theme, base: Color, is_find_current: bool, selected: bool) -> Style {
+fn base_style(theme: &Theme, base: Color, selected: bool) -> Style {
     if selected {
         Style::default()
             .fg(theme.selection_fg)
             .bg(theme.selection_bg)
             .add_modifier(Modifier::BOLD)
     } else {
-        let mut style = Style::default().fg(base);
-        if is_find_current {
-            style = style.add_modifier(Modifier::REVERSED);
-        }
-        style
+        Style::default().fg(base)
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LogField {
+    Meta,
+    LevelTag,
+    Message,
+}
+
+fn field_at(logical_col: usize, level_col: usize, msg_col: usize) -> LogField {
+    if logical_col < level_col {
+        LogField::Meta
+    } else if logical_col < msg_col {
+        LogField::LevelTag
+    } else {
+        LogField::Message
+    }
+}
+
+/// Style a formatted log row: dim timestamp/pid/tid, color level+tag, bright message.
+pub fn log_line_spans(
+    text: &str,
+    log_row: usize,
+    line_char_start: usize,
+    display_pad: usize,
+    base_color: Color,
+    theme: &Theme,
+    selection: &TextSelection,
+    find_q: &str,
+    is_find_current: bool,
+    level_col: usize,
+    msg_col: usize,
+) -> Vec<Span<'static>> {
+    if text.is_empty() {
+        return line_spans(
+            text,
+            log_row,
+            line_char_start,
+            display_pad,
+            base_color,
+            theme,
+            selection,
+            find_q,
+            is_find_current,
+        );
+    }
+
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < chars.len() {
+        let kind = if i < display_pad {
+            LogField::Message
+        } else {
+            field_at(line_char_start + (i - display_pad), level_col, msg_col)
+        };
+        let mut j = i + 1;
+        while j < chars.len() {
+            let next = if j < display_pad {
+                LogField::Message
+            } else {
+                field_at(line_char_start + (j - display_pad), level_col, msg_col)
+            };
+            if next != kind {
+                break;
+            }
+            j += 1;
+        }
+        let piece: String = chars[i..j].iter().collect();
+        let (piece_start, piece_pad) = if i < display_pad {
+            (line_char_start, display_pad - i)
+        } else {
+            (line_char_start + (i - display_pad), 0)
+        };
+        let color = match kind {
+            LogField::LevelTag => base_color,
+            LogField::Meta | LogField::Message => Color::Reset,
+        };
+        let mut spans = line_spans(
+            &piece,
+            log_row,
+            piece_start,
+            piece_pad,
+            color,
+            theme,
+            selection,
+            find_q,
+            is_find_current,
+        );
+        if kind == LogField::Meta {
+            for span in &mut spans {
+                span.style = span.style.add_modifier(Modifier::DIM);
+            }
+        }
+        out.extend(spans);
+        i = j;
+    }
+    out
 }
 
 fn contains(rect: Rect, col: u16, row: u16) -> bool {
@@ -1128,5 +1222,61 @@ mod tests {
             mouse_to_log_pos(2 + 6, 3 + 1, &m, lines(&rows), 1),
             Some(LogPos { row: 0, col: 16 })
         );
+    }
+
+    #[test]
+    fn current_find_match_does_not_reverse_the_row() {
+        let theme = Theme::dark_accents();
+        let sel = TextSelection::default();
+        let spans = line_spans(
+            "hello",
+            0,
+            0,
+            0,
+            Color::Green,
+            &theme,
+            &sel,
+            "el",
+            true,
+        );
+        assert!(!spans[0].style.add_modifier.contains(Modifier::REVERSED));
+        assert_eq!(spans[1].style.bg, Some(theme.find_bg));
+        assert!(spans[1].style.add_modifier.contains(Modifier::BOLD));
+        assert!(spans[1].style.add_modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn log_line_spans_dims_meta_not_message() {
+        use crate::parser::{LogEntry, LogLevel};
+        use crate::ui::format::{format_log_line, log_field_cols};
+        let theme = Theme::dark_accents();
+        let sel = TextSelection::default();
+        let entry = LogEntry {
+            timestamp: "01-01 00:00:00.000".into(),
+            pid: 1,
+            tid: 1,
+            level: LogLevel::Info,
+            tag: "T".into(),
+            message: "hello".into(),
+        };
+        let line = format_log_line(&entry);
+        let (level_col, msg_col) = log_field_cols(&entry);
+        let spans = log_line_spans(
+            &line,
+            0,
+            0,
+            0,
+            theme.level_info,
+            &theme,
+            &sel,
+            "",
+            false,
+            level_col,
+            msg_col,
+        );
+        assert!(spans[0].style.add_modifier.contains(Modifier::DIM));
+        let last = spans.last().unwrap();
+        assert!(!last.style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(last.content, "hello");
     }
 }

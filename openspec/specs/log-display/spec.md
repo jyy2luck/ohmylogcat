@@ -81,6 +81,16 @@ The system SHALL provide a Scroll to End / Follow toolbar control that acts as a
 - **WHEN** tail-following is on and the user activates Scroll to End / Follow
 - **THEN** tail-following turns off
 
+#### Scenario: Follow on/off is explicit
+
+- **WHEN** the toolbar Follow control is rendered
+- **THEN** its label includes a localized on/off word (not a trailing asterisk or padding space)
+
+#### Scenario: New logs chip when not following
+
+- **WHEN** tail-following is off and new matching logs arrive
+- **THEN** the log viewport shows a bottom-right count of new logs, and activating that count turns tail-following on
+
 #### Scenario: Tail-following survives list reset events
 
 - **WHEN** tail-following is on and the user clears logs or switches devices

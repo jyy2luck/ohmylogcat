@@ -98,7 +98,6 @@ fn has_tag(locale: &str, tag: &str) -> bool {
 #[derive(Debug, Clone, Copy)]
 pub struct UiStrings {
     // Toolbar
-    pub toolbar_dev: &'static str,
     pub toolbar_pause: &'static str,
     pub toolbar_resume: &'static str,
     pub toolbar_clear: &'static str,
@@ -107,13 +106,16 @@ pub struct UiStrings {
     pub toolbar_export: &'static str,
     pub toolbar_settings: &'static str,
     pub toolbar_quit: &'static str,
+    pub toolbar_find: &'static str,
     pub none_device: &'static str,
+    pub switch_on: &'static str,
+    pub switch_off: &'static str,
 
     // Filters
     pub filter_tag: &'static str,
     pub filter_message: &'static str,
     pub filter_level: &'static str,
-    pub filter_click_hint: &'static str,
+    pub filter_all: &'static str,
 
     // Find
     pub find_prefix: &'static str,
@@ -122,19 +124,20 @@ pub struct UiStrings {
 
     // Empty state
     pub empty_logs: &'static str,
+    pub empty_unauthorized: &'static str,
+    pub empty_disconnected: &'static str,
+    pub empty_paused: &'static str,
+    pub new_logs_chip: &'static str,
 
-    // Status bar
-    pub status_live: &'static str,
-    pub status_idle: &'static str,
-    pub status_counts_hint: &'static str,
-    pub status_rate_unit: &'static str,
-    pub status_mem_hint: &'static str,
-    pub focus_logs: &'static str,
-    pub focus_level: &'static str,
-    pub focus_find: &'static str,
-    pub focus_modal: &'static str,
-    pub wrap_on: &'static str,
-    pub wrap_off: &'static str,
+    // Session (toolbar + status use the same strings)
+    pub session_live: &'static str,
+    pub session_paused: &'static str,
+    pub session_disconnected: &'static str,
+
+    // Devices list
+    pub device_emulator: &'static str,
+    pub device_physical: &'static str,
+    pub device_current: &'static str,
 
     // Ephemeral status
     pub status_exported_to: &'static str,
@@ -186,7 +189,6 @@ impl UiStrings {
 
     fn en() -> Self {
         Self {
-            toolbar_dev: "Device",
             toolbar_pause: "Pause",
             toolbar_resume: "Resume",
             toolbar_clear: "Clear",
@@ -195,30 +197,33 @@ impl UiStrings {
             toolbar_export: "Export",
             toolbar_settings: "Settings",
             toolbar_quit: "Quit",
+            toolbar_find: "Find",
             none_device: "(none)",
+            switch_on: "on",
+            switch_off: "off",
 
             filter_tag: "Tag",
             filter_message: "Message",
             filter_level: "Level",
-            filter_click_hint: "  (click Tag/Message)",
+            filter_all: "all",
 
             find_prefix: "Find:[",
             find_help_suffix: "  (Enter next · Shift+Enter prev · Esc close)",
             find_zero_matches: "0 matches",
 
             empty_logs: "No logs — press [d] to select a device",
+            empty_unauthorized: "Device unauthorized. Allow USB debugging, then press [d] to refresh.",
+            empty_disconnected: "Disconnected — press [d] to select a device",
+            empty_paused: "Paused — press [Space] to resume",
+            new_logs_chip: "↓ {} new",
 
-            status_live: "● Streaming",
-            status_idle: "○ Idle",
-            status_counts_hint: "(filtered/stored/max)",
-            status_rate_unit: " lines/s(rate)",
-            status_mem_hint: "(mem)",
-            focus_logs: "focus:logs",
-            focus_level: "focus:level",
-            focus_find: "focus:find",
-            focus_modal: "focus:modal",
-            wrap_on: "wrap:on",
-            wrap_off: "wrap:off",
+            session_live: "● Streaming",
+            session_paused: "○ Paused",
+            session_disconnected: "○ Disconnected",
+
+            device_emulator: "emulator",
+            device_physical: "device",
+            device_current: "current",
 
             status_exported_to: "Exported to {}",
             status_copied: "Copied selection",
@@ -230,8 +235,8 @@ impl UiStrings {
             modal_devices_help: "Select device  (↑↓ · enter · r refresh · esc exit)",
 
             modal_export_title: " Export ",
-            modal_export_filtered: "[1]/f] export filtered",
-            modal_export_all: "[2]/a] export all",
+            modal_export_filtered: "[1] filtered",
+            modal_export_all: "[2] all",
             modal_export_cancel: "esc cancel",
             modal_export_path_prompt: "Path (enter confirm · esc cancel):",
             modal_export_filtered_title: " export filtered ",
@@ -259,7 +264,6 @@ impl UiStrings {
 
     fn zh_hans() -> Self {
         Self {
-            toolbar_dev: "设备",
             toolbar_pause: "暂停",
             toolbar_resume: "继续",
             toolbar_clear: "清除",
@@ -268,30 +272,33 @@ impl UiStrings {
             toolbar_export: "导出",
             toolbar_settings: "设置",
             toolbar_quit: "退出",
+            toolbar_find: "查找",
             none_device: "(无)",
+            switch_on: "开",
+            switch_off: "关",
 
             filter_tag: "标签",
             filter_message: "消息",
             filter_level: "级别",
-            filter_click_hint: "  (点击标签/消息)",
+            filter_all: "全部",
 
             find_prefix: "查找:[",
             find_help_suffix: "  (Enter 下一个 · Shift+Enter 上一个 · Esc 关闭)",
             find_zero_matches: "0 个匹配",
 
             empty_logs: "暂无日志 — 按 [d] 选择设备",
+            empty_unauthorized: "设备未授权调试。在手机上允许 USB 调试后按 [d] 刷新。",
+            empty_disconnected: "已断开 — 按 [d] 选择设备",
+            empty_paused: "已暂停 — 按 [Space] 继续",
+            new_logs_chip: "↓ {} 条新日志",
 
-            status_live: "● 拉流中",
-            status_idle: "○ 空闲",
-            status_counts_hint: "(筛选/已存/上限)",
-            status_rate_unit: " 行/秒(速率)",
-            status_mem_hint: "(内存)",
-            focus_logs: "焦点:日志",
-            focus_level: "焦点:级别",
-            focus_find: "焦点:查找",
-            focus_modal: "焦点:弹窗",
-            wrap_on: "换行:开",
-            wrap_off: "换行:关",
+            session_live: "● 拉流中",
+            session_paused: "○ 已暂停",
+            session_disconnected: "○ 已断开",
+
+            device_emulator: "模拟器",
+            device_physical: "真机",
+            device_current: "当前",
 
             status_exported_to: "已导出到 {}",
             status_copied: "已复制选区",
@@ -303,8 +310,8 @@ impl UiStrings {
             modal_devices_help: "选择设备  (↑↓ · Enter · r 刷新 · Esc)",
 
             modal_export_title: " 导出 ",
-            modal_export_filtered: "[1]/f] 导出筛选结果",
-            modal_export_all: "[2]/a] 导出全部",
+            modal_export_filtered: "[1] 筛选结果",
+            modal_export_all: "[2] 全部",
             modal_export_cancel: "Esc 取消",
             modal_export_path_prompt: "路径 (Enter 确认 · Esc 取消):",
             modal_export_filtered_title: " 导出筛选结果 ",
@@ -332,7 +339,6 @@ impl UiStrings {
 
     fn zh_hant() -> Self {
         Self {
-            toolbar_dev: "裝置",
             toolbar_pause: "暫停",
             toolbar_resume: "繼續",
             toolbar_clear: "清除",
@@ -341,30 +347,33 @@ impl UiStrings {
             toolbar_export: "匯出",
             toolbar_settings: "設定",
             toolbar_quit: "退出",
+            toolbar_find: "尋找",
             none_device: "(無)",
+            switch_on: "開",
+            switch_off: "關",
 
             filter_tag: "標籤",
             filter_message: "訊息",
             filter_level: "級別",
-            filter_click_hint: "  (點擊標籤/訊息)",
+            filter_all: "全部",
 
             find_prefix: "尋找:[",
             find_help_suffix: "  (Enter 下一個 · Shift+Enter 上一個 · Esc 關閉)",
             find_zero_matches: "0 個符合",
 
             empty_logs: "暫無日誌 — 按 [d] 選擇裝置",
+            empty_unauthorized: "裝置未授權偵錯。在手機上允許 USB 偵錯後按 [d] 重新整理。",
+            empty_disconnected: "已斷開 — 按 [d] 選擇裝置",
+            empty_paused: "已暫停 — 按 [Space] 繼續",
+            new_logs_chip: "↓ {} 條新日誌",
 
-            status_live: "● 拉流中",
-            status_idle: "○ 空閒",
-            status_counts_hint: "(篩選/已存/上限)",
-            status_rate_unit: " 行/秒(速率)",
-            status_mem_hint: "(記憶體)",
-            focus_logs: "焦點:日誌",
-            focus_level: "焦點:級別",
-            focus_find: "焦點:尋找",
-            focus_modal: "焦點:彈窗",
-            wrap_on: "換行:開",
-            wrap_off: "換行:關",
+            session_live: "● 拉流中",
+            session_paused: "○ 已暫停",
+            session_disconnected: "○ 已斷開",
+
+            device_emulator: "模擬器",
+            device_physical: "真機",
+            device_current: "目前",
 
             status_exported_to: "已匯出到 {}",
             status_copied: "已複製選區",
@@ -376,8 +385,8 @@ impl UiStrings {
             modal_devices_help: "選擇裝置  (↑↓ · Enter · r 重新整理 · Esc)",
 
             modal_export_title: " 匯出 ",
-            modal_export_filtered: "[1]/f] 匯出篩選結果",
-            modal_export_all: "[2]/a] 匯出全部",
+            modal_export_filtered: "[1] 篩選結果",
+            modal_export_all: "[2] 全部",
             modal_export_cancel: "Esc 取消",
             modal_export_path_prompt: "路徑 (Enter 確認 · Esc 取消):",
             modal_export_filtered_title: " 匯出篩選結果 ",
@@ -495,21 +504,21 @@ mod tests {
 
     #[test]
     fn status_indicator_copy_describes_stream_state() {
-        assert_eq!(
-            UiStrings::for_locale(Locale::En).status_live,
-            "● Streaming"
-        );
-        assert_eq!(UiStrings::for_locale(Locale::En).status_idle, "○ Idle");
-        assert_eq!(
-            UiStrings::for_locale(Locale::ZhHans).status_live,
-            "● 拉流中"
-        );
-        assert_eq!(UiStrings::for_locale(Locale::ZhHans).status_idle, "○ 空闲");
-        assert_eq!(
-            UiStrings::for_locale(Locale::ZhHant).status_live,
-            "● 拉流中"
-        );
-        assert_eq!(UiStrings::for_locale(Locale::ZhHant).status_idle, "○ 空閒");
+        let en = UiStrings::for_locale(Locale::En);
+        assert_eq!(en.session_live, "● Streaming");
+        assert_eq!(en.session_paused, "○ Paused");
+        assert_eq!(en.session_disconnected, "○ Disconnected");
+        assert_eq!(en.modal_export_filtered, "[1] filtered");
+        let zh = UiStrings::for_locale(Locale::ZhHans);
+        assert_eq!(zh.session_live, "● 拉流中");
+        assert_eq!(zh.session_paused, "○ 已暂停");
+        assert_eq!(zh.session_disconnected, "○ 已断开");
+        assert_eq!(zh.modal_export_filtered, "[1] 筛选结果");
+        assert!(!zh.modal_export_filtered.contains("[1]/"));
+        let hant = UiStrings::for_locale(Locale::ZhHant);
+        assert_eq!(hant.session_live, "● 拉流中");
+        assert_eq!(hant.session_paused, "○ 已暫停");
+        assert_eq!(hant.session_disconnected, "○ 已斷開");
     }
 
     #[test]

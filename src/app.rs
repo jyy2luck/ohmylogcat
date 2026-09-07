@@ -7,8 +7,8 @@ use crate::settings::{
     load_settings, save_settings, BufferPreset, BufferStats, Settings,
 };
 use crate::ui::{
-    clamp_log_pos, expand_line, expand_word, format_log_line, line_spans,
-    log_pos_to_screen_with_side, message_column_indent, mouse_to_log_pos,
+    clamp_log_pos, expand_line, expand_word, format_log_line, log_field_cols,
+    log_line_spans, log_pos_to_screen_with_side, message_column_indent, mouse_to_log_pos,
     reset_pointer_shape, set_pointer_shape, step_caret_horizontal, str_display_width,
     visible_chars, effective_hang_indent, wrap_chunk_at_col_with_side, wrap_display_col_with_side,
     wrap_display_row_for_col_with_side, wrap_display_text, wrap_line_count,
@@ -171,6 +171,7 @@ struct HitMap {
     filter_modal_input: Option<Rect>,
     find_input: Option<Rect>,
     log_viewport: Option<Rect>,
+    new_logs: Option<Rect>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,8 +181,10 @@ enum ToolbarHit {
     Clear,
     Follow,
     Wrap,
+    Find,
     Export,
     Settings,
+    Quit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,6 +249,7 @@ pub struct OhmylogcatApp {
     last_pointer: Option<PointerShape>,
     last_hardware_cursor_bar: Option<bool>,
     follow_dirty: bool,
+    unread_since_unfollow: usize,
     should_quit: bool,
 }
 
@@ -301,6 +305,7 @@ impl OhmylogcatApp {
             last_pointer: None,
             last_hardware_cursor_bar: None,
             follow_dirty: true,
+            unread_since_unfollow: 0,
             should_quit: false,
             settings,
             theme,
@@ -776,6 +781,14 @@ impl OhmylogcatApp {
                         return;
                     }
                 }
+                if let Some(r) = self.hit_map.new_logs {
+                    if contains(r, col, row) {
+                        if !self.auto_scroll {
+                            self.toggle_follow();
+                        }
+                        return;
+                    }
+                }
                 if self.try_start_log_selection(col, row) {
                     return;
                 }
@@ -788,11 +801,13 @@ impl OhmylogcatApp {
                             ToolbarHit::Clear => self.clear_logs(),
                             ToolbarHit::Follow => self.toggle_follow(),
                             ToolbarHit::Wrap => self.toggle_wrap(),
+                            ToolbarHit::Find => self.open_find(),
                             ToolbarHit::Export => {
                                 self.modal = Some(ModalKind::ExportMenu);
                                 self.focus = Focus::Modal;
                             }
                             ToolbarHit::Settings => self.open_settings(),
+                            ToolbarHit::Quit => self.should_quit = true,
                         }
                         return;
                     }
@@ -1140,6 +1155,7 @@ impl OhmylogcatApp {
         self.caret = None;
         self.caret_wrap_side = WrapCaretSide::NextRow;
         self.caret_preferred_col = 0;
+        self.unread_since_unfollow = 0;
         if self.find.open {
             self.find.recompute(&self.engine);
         }
@@ -1625,6 +1641,7 @@ impl OhmylogcatApp {
         self.auto_scroll = !self.auto_scroll;
         if self.auto_scroll {
             self.follow_dirty = true;
+            self.unread_since_unfollow = 0;
         }
         self.persist_display_prefs();
     }
@@ -2025,6 +2042,10 @@ impl OhmylogcatApp {
             match event {
                 EngineEvent::RowsAppended(n) => {
                     self.follow_dirty = true;
+                    if !self.auto_scroll {
+                        self.unread_since_unfollow =
+                            self.unread_since_unfollow.saturating_add(n);
+                    }
                     if self.find.open {
                         self.find.append_search(&self.engine, n);
                     }
@@ -2045,6 +2066,7 @@ impl OhmylogcatApp {
                 }
                 EngineEvent::Cleared => {
                     self.follow_dirty = true;
+                    self.unread_since_unfollow = 0;
                     if self.find.open {
                         self.find.recompute(&self.engine);
                     }
@@ -2088,7 +2110,8 @@ impl OhmylogcatApp {
         self.draw_status(frame, chunks[7]);
 
         if self.modal.is_some() {
-            self.draw_modal(frame, area);
+            let filter_top = chunks[2].y.saturating_add(2);
+            self.draw_modal(frame, area, filter_top);
         }
 
         self.apply_pointer_shape();
@@ -2096,67 +2119,111 @@ impl OhmylogcatApp {
 
     fn draw_toolbar(&mut self, frame: &mut Frame, area: Rect) {
         let paused = self.engine.is_paused();
-        let pause_label = if paused {
-            self.ui.toolbar_resume
+        let streaming = self.engine.is_streaming();
+        let ui = self.ui;
+        let session = session_label(paused, streaming, &ui);
+        let session_style = if paused {
+            Style::default().add_modifier(Modifier::DIM)
+        } else if streaming {
+            Style::default().add_modifier(Modifier::BOLD)
         } else {
-            self.ui.toolbar_pause
+            Style::default().add_modifier(Modifier::DIM)
         };
-        let follow_mark = if self.auto_scroll { "*" } else { " " };
-        let wrap_mark = if self.soft_wrap { "*" } else { " " };
-        let device_label = self
+        let pause_label = if paused {
+            ui.toolbar_resume
+        } else {
+            ui.toolbar_pause
+        };
+        let follow_on = self.auto_scroll;
+        let wrap_on = self.soft_wrap;
+        let on_style = Style::default().add_modifier(Modifier::BOLD);
+        let serial = self
             .selected_serial
             .as_deref()
-            .unwrap_or(self.ui.none_device);
-        let ui = self.ui;
+            .unwrap_or(ui.none_device);
 
-        let labels: Vec<(String, ToolbarHit)> = vec![
-            (
-                format!("[d]{}:{device_label}", ui.toolbar_dev),
-                ToolbarHit::Devices,
-            ),
-            (format!("[Space]{pause_label}"), ToolbarHit::Pause),
-            (format!("[c]{}", ui.toolbar_clear), ToolbarHit::Clear),
-            (
-                format!("[f]{}{follow_mark}", ui.toolbar_follow),
-                ToolbarHit::Follow,
-            ),
-            (
-                format!("[w]{}{wrap_mark}", ui.toolbar_wrap),
-                ToolbarHit::Wrap,
-            ),
-            (format!("[e]{}", ui.toolbar_export), ToolbarHit::Export),
-            (
-                format!("[s]{}", ui.toolbar_settings),
-                ToolbarHit::Settings,
-            ),
+        let session_item = ChromeItem {
+            label: session.to_string(),
+            hit: None,
+            style: session_style,
+        };
+        let mid = vec![
+            ChromeItem {
+                label: format!("[Space]{pause_label}"),
+                hit: Some(ToolbarHit::Pause),
+                style: Style::default(),
+            },
+            ChromeItem {
+                label: format!(
+                    "[f]{}·{}",
+                    ui.toolbar_follow,
+                    if follow_on {
+                        ui.switch_on
+                    } else {
+                        ui.switch_off
+                    }
+                ),
+                hit: Some(ToolbarHit::Follow),
+                style: if follow_on { on_style } else { Style::default() },
+            },
+            ChromeItem {
+                label: format!(
+                    "[w]{}·{}",
+                    ui.toolbar_wrap,
+                    if wrap_on {
+                        ui.switch_on
+                    } else {
+                        ui.switch_off
+                    }
+                ),
+                hit: Some(ToolbarHit::Wrap),
+                style: if wrap_on { on_style } else { Style::default() },
+            },
         ];
+        let dim = Style::default().add_modifier(Modifier::DIM);
+        let right = vec![
+            ChromeItem {
+                label: format!("[/]{}", ui.toolbar_find),
+                hit: Some(ToolbarHit::Find),
+                style: dim,
+            },
+            ChromeItem {
+                label: format!("[c]{}", ui.toolbar_clear),
+                hit: Some(ToolbarHit::Clear),
+                style: dim,
+            },
+            ChromeItem {
+                label: format!("[e]{}", ui.toolbar_export),
+                hit: Some(ToolbarHit::Export),
+                style: dim,
+            },
+            ChromeItem {
+                label: format!("[s]{}", ui.toolbar_settings),
+                hit: Some(ToolbarHit::Settings),
+                style: dim,
+            },
+            ChromeItem {
+                label: format!("[q]{}", ui.toolbar_quit),
+                hit: Some(ToolbarHit::Quit),
+                style: dim,
+            },
+        ];
+
+        let fitted = fit_toolbar(area.width as usize, serial, session_item, mid, right);
 
         let mut spans = Vec::new();
         let mut x = area.x;
-        for (i, (label, hit)) in labels.iter().enumerate() {
-            if i > 0 {
-                spans.push(Span::raw(" │ "));
-                x = x.saturating_add(3);
-            }
-            let width = str_display_width(label);
-            let rect = Rect {
-                x,
-                y: area.y,
-                width,
-                height: 1,
-            };
-            self.hit_map.toolbar.push((rect, *hit));
-            spans.push(Span::styled(
-                label.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            ));
-            x = x.saturating_add(width);
+        x = push_toolbar_cluster(&mut spans, &mut self.hit_map, x, area.y, &fitted.left);
+        if fitted.gap_after_left > 0 {
+            spans.push(Span::raw(" ".repeat(fitted.gap_after_left)));
+            x = x.saturating_add(fitted.gap_after_left as u16);
         }
-        spans.push(Span::raw(" │ "));
-        spans.push(Span::styled(
-            format!("[q]{}", ui.toolbar_quit),
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
+        x = push_toolbar_cluster(&mut spans, &mut self.hit_map, x, area.y, &fitted.mid);
+        if fitted.gap_after_mid > 0 {
+            spans.push(Span::raw(" ".repeat(fitted.gap_after_mid)));
+            x = x.saturating_add(fitted.gap_after_mid as u16);
+        }
+        push_toolbar_cluster(&mut spans, &mut self.hit_map, x, area.y, &fitted.right);
 
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
     }
@@ -2167,21 +2234,34 @@ impl OhmylogcatApp {
     }
 
     fn draw_filters(&mut self, frame: &mut Frame, area: Rect) {
+        let ui = self.ui;
         let level_text = self
             .filter_level
             .map(|l| l.to_display())
-            .unwrap_or("Verbose");
-        let ui = self.ui;
+            .unwrap_or(ui.filter_all);
+        let tag_value = filter_value_label(&self.filter_tag.text, ui.filter_all, 16);
+        let msg_value = filter_value_label(&self.filter_message.text, ui.filter_all, 24);
+        let tag_active = !self.filter_tag.text.is_empty();
+        let msg_active = !self.filter_message.text.is_empty();
+        let level_active = self.filter_level.is_some();
 
-        let summary_style = Style::default();
         let shortcut_style = Style::default().add_modifier(Modifier::BOLD);
-        let level_style = field_style(self.focus == Focus::Level, &self.theme);
+        let active_style = Style::default().add_modifier(Modifier::BOLD);
+        let idle_style = Style::default();
+        let level_style = if self.focus == Focus::Level {
+            field_style(true, &self.theme)
+        } else if level_active {
+            active_style
+        } else {
+            idle_style
+        };
 
-        let tag_value = truncate_input(&self.filter_tag.text, 16);
-        let msg_value = truncate_input(&self.filter_message.text, 24);
-        let tag_label = format!("[t]{}[{tag_value}] ", ui.filter_tag);
-        let msg_label = format!("[m]{}[{msg_value}] ", ui.filter_message);
-        let level_label = format!("[l]{}[{level_text}]", ui.filter_level);
+        let tag_body = format!(" {}: {tag_value} ", ui.filter_tag);
+        let msg_body = format!(" {}: {msg_value} ", ui.filter_message);
+        let level_body = format!(" {}: {level_text}", ui.filter_level);
+        let tag_label = format!("[t]{tag_body}");
+        let msg_label = format!("[m]{msg_body}");
+        let level_label = format!("[l]{level_body}");
 
         let mut x = area.x;
         let tag_w = str_display_width(&tag_label);
@@ -2210,15 +2290,11 @@ impl OhmylogcatApp {
 
         let line = Line::from(vec![
             Span::styled("[t]", shortcut_style),
-            Span::styled(format!("{}[{tag_value}] ", ui.filter_tag), summary_style),
+            Span::styled(tag_body, if tag_active { active_style } else { idle_style }),
             Span::styled("[m]", shortcut_style),
-            Span::styled(
-                format!("{}[{msg_value}] ", ui.filter_message),
-                summary_style,
-            ),
+            Span::styled(msg_body, if msg_active { active_style } else { idle_style }),
             Span::styled("[l]", shortcut_style),
-            Span::styled(format!("{}[{level_text}]", ui.filter_level), level_style),
-            Span::styled(ui.filter_click_hint, summary_style),
+            Span::styled(level_body, level_style),
         ]);
         frame.render_widget(Paragraph::new(line), area);
     }
@@ -2300,7 +2376,7 @@ impl OhmylogcatApp {
         let mut items: Vec<ListItem> = Vec::new();
 
         if row_count == 0 {
-            items.push(ListItem::new(Span::raw(self.ui.empty_logs)));
+            items.push(ListItem::new(Span::raw(self.empty_logs_message())));
             frame.render_widget(List::new(items), area);
             return;
         }
@@ -2342,7 +2418,8 @@ impl OhmylogcatApp {
                     } else {
                         0
                     };
-                    let spans = line_spans(
+                    let (level_col, msg_col) = log_field_cols(entry);
+                    let spans = log_line_spans(
                         &display,
                         row_idx,
                         logical_start,
@@ -2352,6 +2429,8 @@ impl OhmylogcatApp {
                         &self.selection,
                         &find_q,
                         is_current && logical_start == 0,
+                        level_col,
+                        msg_col,
                     );
                     items.push(ListItem::new(Line::from(spans)));
                 }
@@ -2367,7 +2446,8 @@ impl OhmylogcatApp {
                 let visible = visible_chars(&line_str, self.col_offset, self.viewport_width);
                 let base_color = self.theme.level_color(entry.level);
                 let is_current = current_row == Some(row_idx);
-                let spans = line_spans(
+                let (level_col, msg_col) = log_field_cols(entry);
+                let spans = log_line_spans(
                     &visible,
                     row_idx,
                     self.col_offset,
@@ -2377,12 +2457,15 @@ impl OhmylogcatApp {
                     &self.selection,
                     &find_q,
                     is_current,
+                    level_col,
+                    msg_col,
                 );
                 items.push(ListItem::new(Line::from(spans)));
             }
         }
 
         frame.render_widget(List::new(items), area);
+        self.draw_new_logs_chip(frame, area);
 
         if !self.text_input_focused() {
             if let Some((x, y)) = self.log_caret_screen_pos() {
@@ -2392,76 +2475,94 @@ impl OhmylogcatApp {
     }
 
     fn draw_status(&self, frame: &mut Frame, area: Rect) {
-        let live = self.engine.is_streaming();
-        let live_txt = if live {
-            self.ui.status_live
-        } else {
-            self.ui.status_idle
-        };
-        let focus_hint = match self.focus {
-            Focus::Logs => self.ui.focus_logs,
-            Focus::Level => self.ui.focus_level,
-            Focus::Find => self.ui.focus_find,
-            Focus::Modal => self.ui.focus_modal,
-        };
+        let session = session_label(
+            self.engine.is_paused(),
+            self.engine.is_streaming(),
+            &self.ui,
+        );
+        let left = format!(
+            "{}  {} / {}",
+            session,
+            self.engine.filtered_len(),
+            self.stats.count
+        );
         let err = self
             .last_error
             .as_deref()
             .or(self.status_message.as_deref())
             .unwrap_or("");
-        let wrap_hint = if self.soft_wrap {
-            self.ui.wrap_on
-        } else {
-            self.ui.wrap_off
-        };
-        let filtered = self.engine.filtered_len();
-        let text = format!(
-            "{}  {}/{}/{}{}  {:.0}{}  ~{:.1}MB{}  {}  {}  {}",
-            live_txt,
-            filtered,
-            self.stats.count,
-            self.stats.capacity,
-            self.ui.status_counts_hint,
-            self.stats.lines_per_sec,
-            self.ui.status_rate_unit,
-            self.stats.memory_estimate_mb,
-            self.ui.status_mem_hint,
-            focus_hint,
-            wrap_hint,
-            err
+        if err.is_empty() {
+            frame.render_widget(Paragraph::new(left), area);
+            return;
+        }
+        let pad = (area.width as usize).saturating_sub(
+            str_display_width(&left) as usize + str_display_width(err) as usize,
         );
-        frame.render_widget(Paragraph::new(text), area);
+        let err_style = if self.last_error.is_some() {
+            Style::default().fg(self.theme.level_error)
+        } else {
+            Style::default()
+        };
+        let line = Line::from(vec![
+            Span::raw(left),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(err.to_string(), err_style),
+        ]);
+        frame.render_widget(Paragraph::new(line), area);
     }
 
-    fn draw_modal(&mut self, frame: &mut Frame, area: Rect) {
+    fn draw_modal(&mut self, frame: &mut Frame, area: Rect, filter_top: u16) {
         let kind = self.modal.clone();
         let Some(kind) = kind else { return };
 
-        let popup = centered_rect(60, 50, area);
+        let popup = match &kind {
+            ModalKind::FilterEdit { .. } => overlay_anchor(area, 5, 42, filter_top, false),
+            ModalKind::ExportMenu => overlay_anchor(area, 8, 36, filter_top, true),
+            ModalKind::Export { .. } => overlay_anchor(area, 6, 56, filter_top, true),
+            ModalKind::Devices => {
+                let h = 5u16.saturating_add(self.devices.len() as u16);
+                overlay_anchor(area, h.max(7), 56, filter_top, false)
+            }
+            ModalKind::Settings => overlay_anchor(area, 12, 64, filter_top, false),
+        };
         frame.render_widget(Clear, popup);
 
         let ui = self.ui;
         match kind {
             ModalKind::Devices => {
-                let mut lines = vec![
-                    Line::from(ui.modal_devices_help),
-                    Line::from(""),
-                ];
+                let mut lines = vec![Line::from("")];
                 let none_selected = self.device_cursor == 0;
+                let none_current = self.selected_serial.is_none();
                 lines.push(Line::from(format!(
-                    "{} {}",
+                    "{} {}{}",
                     if none_selected { ">" } else { " " },
-                    ui.none_device
+                    ui.none_device,
+                    if none_current {
+                        format!(" · {}", ui.device_current)
+                    } else {
+                        String::new()
+                    }
                 )));
                 for (i, d) in self.devices.iter().enumerate() {
                     let sel = self.device_cursor == i + 1;
+                    let is_current = self.selected_serial.as_deref() == Some(d.serial.as_str());
+                    let kind_label = device_kind_label(&d.serial, &ui);
+                    let current = if is_current {
+                        format!(" · {}", ui.device_current)
+                    } else {
+                        String::new()
+                    };
                     lines.push(Line::from(format!(
-                        "{} {} ({})",
+                        "{} {}  {} · {}{}",
                         if sel { ">" } else { " " },
                         d.serial,
-                        d.state
+                        kind_label,
+                        d.state,
+                        current
                     )));
                 }
+                lines.push(Line::from(""));
+                lines.push(Line::from(ui.modal_devices_help));
                 let block = Block::default()
                     .title(ui.modal_devices_title)
                     .borders(Borders::ALL);
@@ -2501,10 +2602,7 @@ impl OhmylogcatApp {
             ModalKind::Settings => {
                 let focus = self.settings_panel.focus_field;
                 let mark = |field: SettingsField| if focus == field { ">" } else { " " };
-                let mut lines = vec![
-                    Line::from(ui.modal_settings_help),
-                    Line::from(""),
-                ];
+                let mut lines = Vec::new();
                 for &field in SettingsPanelState::visible_fields(self.settings_panel.preset) {
                     match field {
                         SettingsField::Adb => {
@@ -2563,6 +2661,8 @@ impl OhmylogcatApp {
                     lines.push(Line::from(""));
                     lines.push(Line::from(s.clone()));
                 }
+                lines.push(Line::from(""));
+                lines.push(Line::from(ui.modal_settings_help));
                 let block = Block::default()
                     .title(ui.modal_settings_title)
                     .borders(Borders::ALL);
@@ -2610,6 +2710,50 @@ impl OhmylogcatApp {
             }
         }
     }
+
+    fn draw_new_logs_chip(&mut self, frame: &mut Frame, area: Rect) {
+        if self.auto_scroll || self.unread_since_unfollow == 0 || area.width < 8 {
+            return;
+        }
+        let label = self
+            .ui
+            .new_logs_chip
+            .replace("{}", &self.unread_since_unfollow.to_string());
+        let width = str_display_width(&label).min(area.width);
+        let chip = Rect {
+            x: area.x.saturating_add(area.width.saturating_sub(width)),
+            y: area.y.saturating_add(area.height.saturating_sub(1)),
+            width,
+            height: 1,
+        };
+        self.hit_map.new_logs = Some(chip);
+        frame.render_widget(
+            Paragraph::new(label).style(Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)),
+            chip,
+        );
+    }
+
+    fn empty_logs_message(&self) -> &'static str {
+        if self.engine.is_paused() {
+            return self.ui.empty_paused;
+        }
+        let unauthorized = self.last_error.as_deref().is_some_and(|e| {
+            e.to_ascii_lowercase().contains("unauthorized")
+        });
+        if let Some(serial) = &self.selected_serial {
+            if unauthorized
+                || self.devices.iter().any(|d| {
+                    &d.serial == serial && d.state.eq_ignore_ascii_case("unauthorized")
+                })
+            {
+                return self.ui.empty_unauthorized;
+            }
+            if !self.engine.is_streaming() {
+                return self.ui.empty_disconnected;
+            }
+        }
+        self.ui.empty_logs
+    }
 }
 
 fn is_letter_shortcut(key: &KeyEvent, expected: char) -> bool {
@@ -2641,12 +2785,9 @@ fn contains(rect: Rect, col: u16, row: u16) -> bool {
         && row < rect.y.saturating_add(rect.height)
 }
 
-fn field_style(focused: bool, theme: &Theme) -> Style {
+fn field_style(focused: bool, _theme: &Theme) -> Style {
     if focused {
-        Style::default()
-            .fg(theme.focus_fg)
-            .bg(theme.focus_bg)
-            .add_modifier(Modifier::BOLD)
+        Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
     } else {
         Style::default()
     }
@@ -2691,23 +2832,191 @@ fn shell_content_area(area: Rect) -> Rect {
         .split(vertical[1])[1]
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let popup = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(area);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup[1])[1]
+fn session_label(paused: bool, streaming: bool, ui: &UiStrings) -> &'static str {
+    if paused {
+        ui.session_paused
+    } else if streaming {
+        ui.session_live
+    } else {
+        ui.session_disconnected
+    }
+}
+
+fn filter_value_label(value: &str, all: &str, max: usize) -> String {
+    if value.is_empty() {
+        all.to_string()
+    } else {
+        truncate_input(value, max)
+    }
+}
+
+fn device_kind_label(serial: &str, ui: &UiStrings) -> &'static str {
+    if serial.starts_with("emulator") {
+        ui.device_emulator
+    } else {
+        ui.device_physical
+    }
+}
+
+#[derive(Clone)]
+struct ChromeItem {
+    label: String,
+    hit: Option<ToolbarHit>,
+    style: Style,
+}
+
+fn chrome_width(items: &[ChromeItem]) -> usize {
+    if items.is_empty() {
+        return 0;
+    }
+    items
+        .iter()
+        .map(|it| str_display_width(&it.label) as usize)
+        .sum::<usize>()
+        + 3 * items.len().saturating_sub(1)
+}
+
+fn truncate_device_label(serial: &str, max: usize) -> String {
+    const PREFIX: &str = "[d] ";
+    if max <= PREFIX.len() {
+        return "[d]…".into();
+    }
+    format!(
+        "{PREFIX}{}",
+        truncate_input(serial, max.saturating_sub(PREFIX.len()))
+    )
+}
+
+struct FittedToolbar {
+    left: Vec<ChromeItem>,
+    mid: Vec<ChromeItem>,
+    right: Vec<ChromeItem>,
+    gap_after_left: usize,
+    gap_after_mid: usize,
+}
+
+impl FittedToolbar {
+    fn content_width(&self) -> usize {
+        let mut w = chrome_width(&self.left);
+        if !self.mid.is_empty() {
+            w += chrome_width(&self.mid);
+        }
+        if !self.right.is_empty() {
+            w += chrome_width(&self.right);
+        }
+        w
+    }
+
+    fn total_width(&self) -> usize {
+        self.content_width() + self.gap_after_left + self.gap_after_mid
+    }
+}
+
+fn push_toolbar_cluster(
+    spans: &mut Vec<Span<'static>>,
+    hit_map: &mut HitMap,
+    mut x: u16,
+    y: u16,
+    items: &[ChromeItem],
+) -> u16 {
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" │ "));
+            x = x.saturating_add(3);
+        }
+        let width = str_display_width(&item.label);
+        if let Some(hit) = item.hit {
+            hit_map.toolbar.push((
+                Rect {
+                    x,
+                    y,
+                    width,
+                    height: 1,
+                },
+                hit,
+            ));
+        }
+        spans.push(Span::styled(item.label.clone(), item.style));
+        x = x.saturating_add(width);
+    }
+    x
+}
+
+fn overlay_anchor(area: Rect, height: u16, max_w: u16, top: u16, right_align: bool) -> Rect {
+    let margin = 1u16;
+    let width = area.width.saturating_sub(margin.saturating_mul(2)).min(max_w).max(12);
+    let max_h = area.height.saturating_sub(margin.saturating_mul(2)).max(3);
+    let height = height.min(max_h).max(3);
+    let x = if right_align {
+        area.x
+            .saturating_add(area.width.saturating_sub(width).saturating_sub(margin))
+    } else {
+        area.x.saturating_add(margin)
+    };
+    let y_max = area.y.saturating_add(area.height.saturating_sub(height));
+    let y = top.min(y_max).max(area.y);
+    Rect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+fn fit_toolbar(
+    avail: usize,
+    serial: &str,
+    session: ChromeItem,
+    mut mid: Vec<ChromeItem>,
+    mut right: Vec<ChromeItem>,
+) -> FittedToolbar {
+    const DEVICE_CAP: usize = 28;
+    loop {
+        let rest_w = chrome_width(std::slice::from_ref(&session))
+            + chrome_width(&mid)
+            + chrome_width(&right);
+        let device_max = avail
+            .saturating_sub(rest_w.saturating_add(3))
+            .min(DEVICE_CAP)
+            .max(4);
+        let device = ChromeItem {
+            label: truncate_device_label(serial, device_max),
+            hit: Some(ToolbarHit::Devices),
+            style: Style::default().add_modifier(Modifier::BOLD),
+        };
+        let left = vec![device, session.clone()];
+        let content = chrome_width(&left) + chrome_width(&mid) + chrome_width(&right);
+        if content <= avail || (mid.is_empty() && right.len() <= 1) {
+            let leftover = avail.saturating_sub(content);
+            let (gap_after_left, gap_after_mid) = if mid.is_empty() {
+                (leftover, 0)
+            } else {
+                (leftover / 2, leftover - leftover / 2)
+            };
+            return FittedToolbar {
+                left,
+                mid,
+                right,
+                gap_after_left,
+                gap_after_mid,
+            };
+        }
+        if !mid.is_empty() {
+            mid.pop();
+            continue;
+        }
+        if right.len() > 1 {
+            right.remove(0);
+            continue;
+        }
+        return FittedToolbar {
+            left,
+            mid,
+            right,
+            gap_after_left: 0,
+            gap_after_mid: 0,
+        };
+    }
 }
 
 #[cfg(test)]
@@ -2769,6 +3078,7 @@ mod tests {
             last_pointer: None,
             last_hardware_cursor_bar: None,
             follow_dirty: false,
+            unread_since_unfollow: 0,
             should_quit: false,
         }
     }
@@ -3342,5 +3652,155 @@ mod tests {
         assert_eq!(app.find.input.text, "b");
         assert!(!app.find.input.select_all);
         assert_eq!(app.find.matches.len(), 2);
+    }
+
+    #[test]
+    fn session_label_prefers_paused_over_streaming() {
+        let ui = UiStrings::for_locale(Locale::En);
+        assert_eq!(session_label(true, true, &ui), ui.session_paused);
+        assert_eq!(session_label(false, true, &ui), ui.session_live);
+        assert_eq!(session_label(false, false, &ui), ui.session_disconnected);
+    }
+
+    #[test]
+    fn filter_empty_value_reads_as_all() {
+        let ui = UiStrings::for_locale(Locale::ZhHans);
+        assert_eq!(filter_value_label("", ui.filter_all, 16), "全部");
+        assert_eq!(filter_value_label("Activity", ui.filter_all, 16), "Activity");
+    }
+
+    #[test]
+    fn toolbar_keeps_quit_and_truncates_device_on_narrow_width() {
+        let ui = UiStrings::for_locale(Locale::ZhHans);
+        let session = ChromeItem {
+            label: ui.session_live.into(),
+            hit: None,
+            style: Style::default(),
+        };
+        let mid = vec![ChromeItem {
+            label: format!("[Space]{}", ui.toolbar_pause),
+            hit: Some(ToolbarHit::Pause),
+            style: Style::default(),
+        }];
+        let right = vec![
+            ChromeItem {
+                label: format!("[/]{}", ui.toolbar_find),
+                hit: Some(ToolbarHit::Find),
+                style: Style::default(),
+            },
+            ChromeItem {
+                label: format!("[q]{}", ui.toolbar_quit),
+                hit: Some(ToolbarHit::Quit),
+                style: Style::default(),
+            },
+        ];
+        let fitted = fit_toolbar(
+            40,
+            "emulator-5554-very-long-serial",
+            session,
+            mid,
+            right,
+        );
+        let joined: String = fitted
+            .left
+            .iter()
+            .chain(fitted.mid.iter())
+            .chain(fitted.right.iter())
+            .map(|it| it.label.as_str())
+            .collect::<Vec<_>>()
+            .join(" │ ");
+        assert!(joined.contains("[q]退出"));
+        assert!(fitted.total_width() <= 40);
+        assert!(fitted.left[0].label.starts_with("[d] "));
+        assert!(fitted
+            .right
+            .iter()
+            .any(|it| it.hit == Some(ToolbarHit::Quit)));
+    }
+
+    #[test]
+    fn toolbar_pins_actions_right_on_wide_width() {
+        let ui = UiStrings::for_locale(Locale::ZhHans);
+        let session = ChromeItem {
+            label: ui.session_live.into(),
+            hit: None,
+            style: Style::default(),
+        };
+        let mid = vec![ChromeItem {
+            label: format!("[Space]{}", ui.toolbar_pause),
+            hit: Some(ToolbarHit::Pause),
+            style: Style::default(),
+        }];
+        let right = vec![ChromeItem {
+            label: format!("[q]{}", ui.toolbar_quit),
+            hit: Some(ToolbarHit::Quit),
+            style: Style::default(),
+        }];
+        let fitted = fit_toolbar(120, "emulator-5554", session, mid, right);
+        assert_eq!(fitted.total_width(), 120);
+        assert!(fitted.gap_after_left + fitted.gap_after_mid > 8);
+        assert_eq!(fitted.left[0].hit, Some(ToolbarHit::Devices));
+        assert_eq!(fitted.right.last().map(|it| it.hit), Some(Some(ToolbarHit::Quit)));
+        assert!(fitted.left[0].label.contains("emulator-5554"));
+        assert!(!fitted.left[0].label.contains('…'));
+    }
+
+    #[test]
+    fn follow_wrap_labels_use_on_off_words() {
+        let ui = UiStrings::for_locale(Locale::ZhHans);
+        let follow_on = format!("[f]{}·{}", ui.toolbar_follow, ui.switch_on);
+        let follow_off = format!("[f]{}·{}", ui.toolbar_follow, ui.switch_off);
+        assert_eq!(follow_on, "[f]跟随·开");
+        assert_eq!(follow_off, "[f]跟随·关");
+        assert!(!follow_on.contains('*'));
+        assert!(!follow_off.ends_with(' '));
+    }
+
+    #[test]
+    fn unread_chip_counts_when_not_following_and_clears_on_follow() {
+        let mut app = build_app();
+        app.auto_scroll = false;
+        app.engine.emit_from(EngineEvent::RowsAppended(18));
+        app.drain_events();
+        assert_eq!(app.unread_since_unfollow, 18);
+        app.toggle_follow();
+        assert!(app.auto_scroll);
+        assert_eq!(app.unread_since_unfollow, 0);
+    }
+
+    #[test]
+    fn overlay_filter_sits_below_filters_export_sits_right() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let filter = overlay_anchor(area, 5, 42, 4, false);
+        assert_eq!(filter.x, 1);
+        assert_eq!(filter.y, 4);
+        assert!(filter.width <= 42);
+        let export = overlay_anchor(area, 8, 36, 4, true);
+        assert_eq!(export.y, 4);
+        assert_eq!(export.x + export.width, 79);
+    }
+
+    #[test]
+    fn empty_state_uses_unauthorized_copy() {
+        let mut app = build_app();
+        app.ui = UiStrings::for_locale(Locale::ZhHans);
+        app.selected_serial = Some("R5CT90".into());
+        app.devices = vec![Device {
+            serial: "R5CT90".into(),
+            state: "unauthorized".into(),
+        }];
+        assert_eq!(app.empty_logs_message(), app.ui.empty_unauthorized);
+    }
+
+    #[test]
+    fn emulator_serial_uses_emulator_kind_label() {
+        let ui = UiStrings::for_locale(Locale::ZhHans);
+        assert_eq!(device_kind_label("emulator-5554", &ui), "模拟器");
+        assert_eq!(device_kind_label("R5CT90XXXX", &ui), "真机");
     }
 }

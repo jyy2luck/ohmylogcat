@@ -12,6 +12,13 @@ pub fn format_log_line(entry: &LogEntry) -> String {
     )
 }
 
+/// `(level_col, message_col)` in the formatted line.
+/// Meta is `[0, level_col)`, level+tag is `[level_col, message_col)`.
+pub fn log_field_cols(entry: &LogEntry) -> (usize, usize) {
+    let meta = format!("{} {:5} {:5} ", entry.timestamp, entry.pid, entry.tid);
+    (meta.chars().count(), message_column_indent(entry))
+}
+
 /// Character index where the message field begins (after `{tag}: `).
 pub fn message_column_indent(entry: &LogEntry) -> usize {
     format!(
@@ -63,5 +70,16 @@ mod tests {
         let chars: Vec<char> = line.chars().collect();
         let msg: String = chars[indent..].iter().collect();
         assert_eq!(msg, "hello");
+    }
+
+    #[test]
+    fn log_field_cols_split_meta_and_message() {
+        let entry = sample_entry();
+        let line = format_log_line(&entry);
+        let (level_col, msg_col) = log_field_cols(&entry);
+        let chars: Vec<char> = line.chars().collect();
+        assert_eq!(chars[level_col], 'I');
+        assert_eq!(chars[msg_col..].iter().collect::<String>(), "hello");
+        assert!(level_col < msg_col);
     }
 }

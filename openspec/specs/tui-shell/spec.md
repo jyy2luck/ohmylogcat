@@ -97,36 +97,41 @@ The system SHALL render horizontal divider lines between the toolbar, filter row
 
 ### Requirement: Filter row shortcut labels
 
-The system SHALL label Tag, Message, and Level controls in the filter row with inline keyboard shortcut hints matching toolbar style: `[t]Tag[value]`, `[m]Message[value]`, and `[l]Level[value]`. When Tag or Message filter is unset, the value brackets SHALL be empty (e.g. `[t]Tag[]`). Level SHALL always display the current minimum level name (default Verbose). The filter row SHALL NOT show a trailing `(t/m edit · l level · …)` hint; it MAY show `(click Tag/Message)` for mouse users.
+The system SHALL label Tag, Message, and Level controls in the filter row with inline keyboard shortcut hints matching toolbar style: `[t] Tag: value`, `[m] Message: value`, and `[l] Level: value`. When Tag or Message filter is unset, the value SHALL read as the localized word for "all" (not empty brackets). When the minimum level is unset, Level SHALL display the same "all" label rather than Verbose. Active (non-all) filters MAY be visually emphasized. The filter row SHALL NOT show a trailing click-instruction hint.
 
 #### Scenario: Empty filter labels
 
 - **WHEN** no Tag or Message filter is active
-- **THEN** the filter row shows `[t]Tag[]` and `[m]Message[]`
+- **THEN** the filter row shows `[t] Tag: all` and `[m] Message: all` (localized)
 
 #### Scenario: Active filter labels
 
 - **WHEN** Tag filter is `myapp` and Message filter is `error`
-- **THEN** the filter row shows `[t]Tag[myapp]` and `[m]Message[error]`
+- **THEN** the filter row shows `[t] Tag: myapp` and `[m] Message: error`
 
-#### Scenario: Level label always present
+#### Scenario: Default level reads as all
+
+- **WHEN** no minimum log level is set
+- **THEN** the filter row shows `[l] Level: all` (localized), not Verbose
+
+#### Scenario: Level label when raised
 
 - **WHEN** the minimum log level is Warn
-- **THEN** the filter row shows `[l]Level[Warn]`
+- **THEN** the filter row shows `[l] Level: Warn`
 
 #### Scenario: Shortcut hints bold
 
 - **WHEN** the filter row is rendered
 - **THEN** the `[t]`, `[m]`, and `[l]` shortcut segments are visually emphasized consistent with toolbar shortcut styling
 
-#### Scenario: Mouse hint only
+#### Scenario: No mouse hint
 
 - **WHEN** the filter row is rendered on the main shell
-- **THEN** the row does not include `(t/m edit · l level · …)` and may include `(click Tag/Message)`
+- **THEN** the row does not include `(click Tag/Message)` or `(t/m edit · l level · …)`
 
 ### Requirement: Toolbar actions as labeled controls
 
-The system SHALL expose primary actions (device selection entry, Pause/Resume, Clear, tail-following toggle, Export, Settings, Quit) as labeled toolbar controls that can be activated by keyboard shortcuts, and SHALL support mouse click activation when the terminal provides mouse events. The Quit control SHALL display the `q` shortcut hint.
+The system SHALL expose primary actions (device selection entry, Pause/Resume, Clear, tail-following toggle, Find, Export, Settings, Quit) as labeled toolbar controls that can be activated by keyboard shortcuts, and SHALL support mouse click activation when the terminal provides mouse events. The Quit control SHALL display the `q` shortcut hint. Device serial SHALL truncate before Quit is clipped. Follow and Wrap SHALL show localized on/off words. The toolbar and status bar SHALL share one session label among streaming, paused, and disconnected.
 
 #### Scenario: Activate pause via keyboard
 
@@ -291,7 +296,7 @@ The system SHALL maintain an explicit focus target among at least: log viewport,
 
 ### Requirement: Settings modal keyboard navigation
 
-The Settings modal SHALL use vertical arrow keys to move focus among visible settings rows and horizontal arrow keys to adjust cycle-type fields (buffer preset and language). Adjustments and accepted text edits SHALL apply immediately to runtime state and persist to settings storage without requiring Enter. The ADB path row SHALL be locked by default: while locked and focused, `e` enters edit mode and `r` restores Auto (clears custom path); printable typing and Backspace SHALL NOT change the path. While ADB path edit mode is active, printable characters and Backspace edit the path append-only; `e` and `r` are treated as ordinary path characters. Custom capacity SHALL remain directly typeable when focused. Left/Right SHALL NOT change text field values. The modal SHALL display a help line at the top documenting move, adjust, ADB lock/edit/restore bindings, Custom capacity text entry, and dismiss bindings. Focus SHALL always rest on a visible row; the Custom capacity row SHALL be included in navigation only when the buffer preset is Custom. Pressing Enter SHALL close the modal. Pressing Esc while ADB path edit mode is active SHALL exit edit mode, keep the current path value, and leave the modal open; pressing Esc while ADB path is not in edit mode SHALL close the modal. Closing SHALL return focus to the log viewport without an additional save or cancel step.
+The Settings modal SHALL use vertical arrow keys to move focus among visible settings rows and horizontal arrow keys to adjust cycle-type fields (buffer preset and language). Adjustments and accepted text edits SHALL apply immediately to runtime state and persist to settings storage without requiring Enter. The ADB path row SHALL be locked by default: while locked and focused, `e` enters edit mode and `r` restores Auto (clears custom path); printable typing and Backspace SHALL NOT change the path. While ADB path edit mode is active, printable characters and Backspace edit the path append-only; `e` and `r` are treated as ordinary path characters. Custom capacity SHALL remain directly typeable when focused. Left/Right SHALL NOT change text field values. The modal SHALL display a help line at the bottom documenting move, adjust, ADB lock/edit/restore bindings, Custom capacity text entry, and dismiss bindings. Focus SHALL always rest on a visible row; the Custom capacity row SHALL be included in navigation only when the buffer preset is Custom. Pressing Enter SHALL close the modal. Pressing Esc while ADB path edit mode is active SHALL exit edit mode, keep the current path value, and leave the modal open; pressing Esc while ADB path is not in edit mode SHALL close the modal. Closing SHALL return focus to the log viewport without an additional save or cancel step.
 
 #### Scenario: Move focus with vertical keys
 
@@ -356,7 +361,7 @@ The Settings modal SHALL use vertical arrow keys to move focus among visible set
 #### Scenario: Help line documents controls
 
 - **WHEN** the Settings modal is rendered
-- **THEN** the first content line documents vertical move, horizontal adjust with immediate apply, ADB `e`/`r`/Esc-edit bindings, Custom capacity text entry, and Enter/Esc dismiss
+- **THEN** the last content line documents vertical move, horizontal adjust with immediate apply, ADB `e`/`r`/Esc-edit bindings, Custom capacity text entry, and Enter/Esc dismiss
 
 #### Scenario: Enter dismisses settings modal
 
@@ -375,7 +380,7 @@ The system SHALL present Settings, export path entry, and Tag/Message filter edi
 #### Scenario: Open settings modal
 
 - **WHEN** the user opens Settings from the toolbar or shortcut
-- **THEN** a modal panel shows adb path (locked by default), buffer configuration, and language controls with keyboard navigation help visible at the top
+- **THEN** a modal panel shows adb path (locked by default), buffer configuration, and language controls with keyboard navigation help visible at the bottom
 
 #### Scenario: Open tag filter modal from filter row
 

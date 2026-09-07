@@ -27,7 +27,7 @@ The system SHALL apply one of two RGB level palettes from Android Studio's Andro
 - **Dark palette**: Verbose `#BBBBBB`, Debug `#299999`, Info `#ABC023`, Warn `#BBB529`, Error/Fatal `#FF6B68`.
 - **Light palette**: Verbose `#000000`, Debug `#389FD6`, Info `#59A869`, Warn `#645607`, Error/Fatal `#CD0000`.
 
-Focus highlight, text selection, and find-match highlighting SHALL use fixed interaction accents independent of which level palette is active. The choice SHALL NOT depend on a user theme preference. Shell chrome SHALL continue to inherit terminal defaults independently of which accent palette is active.
+Focus highlight SHALL use underline (not the find yellow fill). Text selection and find-match highlighting SHALL use interaction accents chosen with the same light/dark detection as the level palette. Find-match SHALL remain a yellow-family fill that stays distinct from Info. The current find match SHALL strengthen the find style (bold/underline) and SHALL NOT reverse the whole log row. Shell chrome SHALL continue to inherit terminal defaults independently of which accent palette is active.
 
 #### Scenario: Light terminal uses light Info green
 
@@ -52,12 +52,22 @@ Focus highlight, text selection, and find-match highlighting SHALL use fixed int
 #### Scenario: Info is visually distinct from the find highlight
 
 - **WHEN** a find match is shown in an Info-level log entry
-- **THEN** the find-match highlight remains black-on-yellow and does not blend with the Info foreground
+- **THEN** the find-match highlight uses a yellow-family fill with dark foreground and does not blend with the Info foreground
 
 #### Scenario: Find and selection remain distinct
 
 - **WHEN** find highlights and a text selection are both visible in the log viewport
 - **THEN** find-match styling and selection styling remain visually distinct from each other and from unhighlighted log text
+
+#### Scenario: Current find match does not reverse the row
+
+- **WHEN** the current find match is visible
+- **THEN** the matching characters use a stronger find style and the rest of the row is not reverse-video
+
+#### Scenario: Focus does not reuse find yellow
+
+- **WHEN** the Level control or Find input is focused
+- **THEN** focus is indicated with underline (and bold) rather than the find yellow background
 
 #### Scenario: No theme preference controls accents
 

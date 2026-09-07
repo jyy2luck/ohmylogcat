@@ -91,7 +91,7 @@ impl Engine {
         let _ = engine.event_tx.lock().unwrap().send(event);
     }
 
-    fn emit_from(&self, event: EngineEvent) {
+    pub(crate) fn emit_from(&self, event: EngineEvent) {
         let _ = self.event_tx.lock().unwrap().send(event);
     }
 

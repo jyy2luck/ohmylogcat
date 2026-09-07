@@ -37,18 +37,22 @@ The system SHALL offer buffer presets: Light (50,000), Normal (200,000), Heavy (
 
 ### Requirement: Display buffer usage in status bar
 
-The system SHALL show in the status bar: a streaming-state indicator, filtered entry count, stored entry count, configured maximum capacity, approximate throughput, and estimated memory usage. Numeric clusters SHALL each be followed by a short parenthetical label in the active UI language. The throughput unit SHALL be localized (not hard-coded English). The streaming indicator SHALL reflect whether the logcat stream is active, using wording that means streaming/pulling logs rather than a generic "live/real-time" label.
+The system SHALL show in the status bar: a session-state indicator shared with the toolbar (streaming / paused / disconnected), filtered entry count, and stored entry count. The status bar SHALL NOT show focus-target, wrap-state, throughput, memory, or parenthetical legends. Errors and ephemeral copy/export messages SHALL occupy the right side of the status row rather than appending to the count cluster. The streaming indicator SHALL use wording that means streaming/pulling logs rather than a generic "live/real-time" label, and SHALL match the toolbar session label.
 
 #### Scenario: Status bar during streaming
 
-- **WHEN** logs are streaming actively and the UI language is English
-- **THEN** the status bar shows a Streaming indicator, the triple `filtered/stored/max` with parenthetical `(filtered/stored/max)`, a localized throughput unit with parenthetical `(rate)`, and a memory estimate with parenthetical `(mem)`
+- **WHEN** logs are streaming actively, display is not paused, and the UI language is English
+- **THEN** both the toolbar and the status bar show a Streaming session label and the status bar shows `filtered / stored` without a max/rate/memory legend
 
 #### Scenario: Status bar labels follow UI language
 - **WHEN** the UI language is Simplified Chinese
-- **THEN** the streaming indicator uses 拉流中 (or 空闲 when idle), the count triple uses `(筛选/已存/上限)`, throughput uses `行/秒(速率)`, and memory uses `(内存)`
+- **THEN** the session indicator uses 拉流中, 已暂停, or 已断开 (matching the toolbar), and the count pair is `筛选数 / 已存` without parenthetical legends
 
 #### Scenario: Status bar Traditional Chinese labels
 - **WHEN** the UI language is Traditional Chinese
-- **THEN** the streaming indicator uses 拉流中 (or 空閒 when idle), the count triple uses `(篩選/已存/上限)`, throughput uses `行/秒(速率)`, and memory uses `(記憶體)`
+- **THEN** the session indicator uses 拉流中, 已暫停, or 已斷開 (matching the toolbar)
+
+#### Scenario: Paused agrees across chrome
+- **WHEN** streaming is paused
+- **THEN** the toolbar session label and the status bar session label both read as paused (not Streaming / 拉流中)
 
