@@ -215,6 +215,10 @@ pub struct OhmylogcatApp {
     status_message: Option<String>,
     /// When set, `status_message` is cleared after this instant (ephemeral tip).
     status_expires_at: Option<Instant>,
+    /// Newer remote release version (numeric, no leading `v`) once known.
+    latest_remote: Option<String>,
+    /// One-shot latest-release discovery result from the background worker.
+    update_rx: Option<Receiver<Option<String>>>,
 
     auto_scroll: bool,
     soft_wrap: bool,
@@ -261,6 +265,11 @@ impl OhmylogcatApp {
         let locale = Locale::resolve(settings.language);
         let ui = UiStrings::for_locale(locale);
         let (engine, event_rx) = Engine::new(settings.buffer_capacity);
+        // One-shot, non-blocking latest-release discovery; failures are silent.
+        let (update_tx, update_rx) = std::sync::mpsc::channel::<Option<String>>();
+        std::thread::spawn(move || {
+            let _ = update_tx.send(crate::cli::fetch_latest_release_version().ok());
+        });
 
         let mut app = Self {
             _rt: rt,
@@ -279,6 +288,8 @@ impl OhmylogcatApp {
             last_error: None,
             status_message: None,
             status_expires_at: None,
+            latest_remote: None,
+            update_rx: Some(update_rx),
             auto_scroll: settings.auto_scroll_to_end,
             soft_wrap: settings.soft_wrap,
             scroll_offset: 0,
@@ -332,6 +343,41 @@ impl OhmylogcatApp {
         self.status_expires_at = None;
     }
 
+    /// Collect the one-shot latest-release result without blocking. Only a
+    /// strictly newer remote triple is kept; failure, timeout, equal, or older
+    /// all leave the version cluster on the current version and never touch
+    /// the status-bar error slot.
+    fn poll_update_check(&mut self) {
+        let Some(rx) = &self.update_rx else {
+            return;
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+        };
+        self.update_rx = None;
+        if let Some(remote) = result {
+            if crate::cli::remote_is_newer(env!("CARGO_PKG_VERSION"), &remote) {
+                self.latest_remote = Some(remote);
+            }
+        }
+    }
+
+    /// Localized version-cluster text: current version plus, when a newer
+    /// remote release is known, the update suffix.
+    fn version_cluster(&self) -> (String, Option<String>) {
+        let current = self
+            .ui
+            .status_version_current
+            .replace("{}", env!("CARGO_PKG_VERSION"));
+        let suffix = self
+            .latest_remote
+            .as_ref()
+            .map(|v| self.ui.status_version_update_suffix.replace("{}", v));
+        (current, suffix)
+    }
+
     fn runtime_handle(&self) -> tokio::runtime::Handle {
         self._rt.handle().clone()
     }
@@ -342,6 +388,7 @@ impl OhmylogcatApp {
 
     pub fn tick(&mut self) {
         self.drain_events();
+        self.poll_update_check();
 
         if let Some(until) = self.status_expires_at {
             if Instant::now() >= until {
@@ -2486,29 +2533,49 @@ impl OhmylogcatApp {
             self.engine.filtered_len(),
             self.stats.count
         );
-        let err = self
+        let mid = self
             .last_error
             .as_deref()
             .or(self.status_message.as_deref())
             .unwrap_or("");
-        if err.is_empty() {
-            frame.render_widget(Paragraph::new(left), area);
-            return;
-        }
-        let pad = (area.width as usize).saturating_sub(
-            str_display_width(&left) as usize + str_display_width(err) as usize,
+        let (current, suffix) = self.version_cluster();
+        let fit = fit_status_row(
+            area.width as usize,
+            &left,
+            mid,
+            &current,
+            suffix.as_deref(),
         );
-        let err_style = if self.last_error.is_some() {
+
+        let mid_style = if self.last_error.is_some() {
             Style::default().fg(self.theme.level_error)
         } else {
             Style::default()
         };
-        let line = Line::from(vec![
-            Span::raw(left),
-            Span::raw(" ".repeat(pad)),
-            Span::styled(err.to_string(), err_style),
-        ]);
-        frame.render_widget(Paragraph::new(line), area);
+        let mut spans = vec![Span::raw(fit.left)];
+        if !fit.mid.is_empty() {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(fit.mid, mid_style));
+        }
+        let used: usize = spans
+            .iter()
+            .map(|s| str_display_width(&s.content) as usize)
+            .sum();
+        let cluster_w = str_display_width(&fit.current) as usize
+            + fit
+                .suffix
+                .as_ref()
+                .map_or(0, |s| str_display_width(s) as usize);
+        let pad = (area.width as usize).saturating_sub(used + cluster_w);
+        spans.push(Span::raw(" ".repeat(pad)));
+        spans.push(Span::raw(fit.current));
+        if let Some(suffix) = fit.suffix {
+            spans.push(Span::styled(
+                suffix,
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
     }
 
     fn draw_modal(&mut self, frame: &mut Frame, area: Rect, filter_top: u16) {
@@ -2842,6 +2909,89 @@ fn session_label(paused: bool, streaming: bool, ui: &UiStrings) -> &'static str 
     }
 }
 
+/// Three-slot status row after fitting into `width`: counts | message |
+/// version cluster (pinned to the right edge).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StatusRowFit {
+    left: String,
+    mid: String,
+    current: String,
+    suffix: Option<String>,
+}
+
+/// Fit the status row into `width` display columns. Drop order on narrow
+/// rows: update suffix first, then the middle message, then the version
+/// cluster; the counts win over everything else.
+fn fit_status_row(
+    width: usize,
+    left: &str,
+    mid: &str,
+    current: &str,
+    suffix: Option<&str>,
+) -> StatusRowFit {
+    let w = |s: &str| str_display_width(s) as usize;
+    let left = truncate_display(left, width);
+    let mut mid = mid.to_string();
+    let mut current = current.to_string();
+    let mut suffix = suffix.map(str::to_string);
+
+    // Needed width: left + (" " + mid)? + " " + current + suffix.
+    let needed = |mid: &str, current: &str, suffix: Option<&String>| {
+        let mid_w = if mid.is_empty() { 0 } else { 1 + w(mid) };
+        w(&left) + mid_w + 1 + w(current) + suffix.map_or(0, |s| w(s))
+    };
+
+    if needed(&mid, &current, suffix.as_ref()) > width {
+        suffix = None;
+    }
+    if needed(&mid, &current, suffix.as_ref()) > width {
+        let cluster_w = w(&current) + suffix.as_ref().map_or(0, |s| w(s));
+        let avail = width
+            .saturating_sub(w(&left))
+            .saturating_sub(1 + cluster_w)
+            .saturating_sub(1);
+        mid = truncate_display(&mid, avail);
+    }
+    if needed(&mid, &current, suffix.as_ref()) > width {
+        let avail = width.saturating_sub(w(&left)).saturating_sub(1);
+        current = truncate_display(&current, avail);
+        if current.is_empty() {
+            suffix = None;
+        }
+    }
+    // Extremely narrow rows: counts still win over the cluster.
+    if w(&left) >= width {
+        current.clear();
+        suffix = None;
+        mid.clear();
+    }
+
+    StatusRowFit {
+        left,
+        mid,
+        current,
+        suffix,
+    }
+}
+
+/// Truncate `s` to at most `max_width` display columns (no ellipsis).
+fn truncate_display(s: &str, max_width: usize) -> String {
+    if str_display_width(s) as usize <= max_width {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in s.chars() {
+        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + cw > max_width {
+            break;
+        }
+        out.push(ch);
+        used += cw;
+    }
+    out
+}
+
 fn filter_value_label(value: &str, all: &str, max: usize) -> String {
     if value.is_empty() {
         all.to_string()
@@ -3052,6 +3202,8 @@ mod tests {
             last_error: None,
             status_message: None,
             status_expires_at: None,
+            latest_remote: None,
+            update_rx: None,
             auto_scroll: false,
             soft_wrap: false,
             scroll_offset: 0,
@@ -3802,5 +3954,160 @@ mod tests {
         let ui = UiStrings::for_locale(Locale::ZhHans);
         assert_eq!(device_kind_label("emulator-5554", &ui), "模拟器");
         assert_eq!(device_kind_label("R5CT90XXXX", &ui), "真机");
+    }
+
+    fn version_cluster_text(ui: &UiStrings, current: &str, latest: Option<&str>) -> String {
+        let mut text = ui.status_version_current.replace("{}", current);
+        if let Some(latest) = latest {
+            text.push_str(&ui.status_version_update_suffix.replace("{}", latest));
+        }
+        text
+    }
+
+    #[test]
+    fn version_cluster_copy_matches_locale_table() {
+        let en = UiStrings::for_locale(Locale::En);
+        assert_eq!(version_cluster_text(&en, "0.6.0", None), "v0.6.0");
+        assert_eq!(
+            version_cluster_text(&en, "0.6.0", Some("0.7.0")),
+            "v0.6.0 (update 0.7.0)"
+        );
+
+        for locale in [Locale::ZhHans, Locale::ZhHant] {
+            let ui = UiStrings::for_locale(locale);
+            assert_eq!(version_cluster_text(&ui, "0.6.0", None), "版本-0.6.0");
+            assert_eq!(
+                version_cluster_text(&ui, "0.6.0", Some("0.7.0")),
+                "版本-0.6.0（有更新0.7.0）"
+            );
+        }
+    }
+
+    #[test]
+    fn status_row_keeps_error_between_counts_and_cluster() {
+        let fit = fit_status_row(
+            80,
+            "● Streaming  3 / 10",
+            "Copy failed: x",
+            "v0.6.0",
+            Some(" (update 0.7.0)"),
+        );
+        assert_eq!(fit.left, "● Streaming  3 / 10");
+        assert_eq!(fit.mid, "Copy failed: x");
+        assert_eq!(fit.current, "v0.6.0");
+        assert_eq!(fit.suffix.as_deref(), Some(" (update 0.7.0)"));
+    }
+
+    #[test]
+    fn status_row_drops_update_suffix_first_on_narrow_rows() {
+        // 1 (left) + 1 (gap) + 6 (current) + 15 (suffix) = 23 > 22.
+        let fit = fit_status_row(22, "L", "", "v0.6.0", Some(" (update 0.7.0)"));
+        assert_eq!(fit.suffix, None);
+        assert_eq!(fit.current, "v0.6.0");
+        assert_eq!(fit.left, "L");
+    }
+
+    #[test]
+    fn status_row_truncates_middle_message_before_cluster() {
+        // left = 19 columns; mid budget = 30 - 19 - 1 - 6 - 1 = 3.
+        let fit = fit_status_row(
+            30,
+            "● Streaming  3 / 10",
+            "a fairly long error message",
+            "v0.6.0",
+            None,
+        );
+        assert_eq!(fit.current, "v0.6.0");
+        assert_eq!(fit.mid, "a f");
+        // No room for the message at all: it is dropped, cluster stays.
+        let fit = fit_status_row(
+            27,
+            "● Streaming  3 / 10",
+            "a fairly long error message",
+            "v0.6.0",
+            None,
+        );
+        assert!(fit.mid.is_empty());
+        assert_eq!(fit.current, "v0.6.0");
+    }
+
+    #[test]
+    fn status_row_counts_win_over_cluster_on_tiny_rows() {
+        let fit = fit_status_row(8, "● Streaming  3 / 10", "err", "v0.6.0", None);
+        assert_eq!(fit.left, "● Stream"); // 8 display columns
+        assert!(fit.current.is_empty());
+        assert!(fit.suffix.is_none());
+        assert!(fit.mid.is_empty());
+    }
+
+    #[test]
+    fn status_row_handles_cjk_widths() {
+        // zh-Hans cluster: 版本-0.6.0 = 10 cols, （有更新0.7.0）= 15 cols.
+        let fit = fit_status_row(
+            12,
+            "● 拉流中  3 / 10",
+            "",
+            "版本-0.6.0",
+            Some("（有更新0.7.0）"),
+        );
+        assert_eq!(fit.suffix, None);
+        // left = 16 cols > 12, so counts win and the cluster is dropped.
+        assert!(fit.current.is_empty());
+        assert_eq!(str_display_width(&fit.left) as usize, 12);
+    }
+
+    #[test]
+    fn status_row_full_zh_cluster_fits_wide_row() {
+        let fit = fit_status_row(
+            80,
+            "● 拉流中  3 / 10",
+            "",
+            "版本-0.6.0",
+            Some("（有更新0.7.0）"),
+        );
+        assert_eq!(fit.current, "版本-0.6.0");
+        assert_eq!(fit.suffix.as_deref(), Some("（有更新0.7.0）"));
+    }
+
+    #[test]
+    fn update_check_keeps_only_newer_remote() {
+        let mut app = build_app();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.update_rx = Some(rx);
+        tx.send(Some("9.9.9".to_string())).unwrap();
+        app.poll_update_check();
+        assert_eq!(app.latest_remote.as_deref(), Some("9.9.9"));
+        assert!(app.update_rx.is_none());
+        assert!(app.last_error.is_none());
+        assert!(app.status_message.is_none());
+    }
+
+    #[test]
+    fn update_check_ignores_equal_older_and_failure() {
+        for result in [
+            Some(env!("CARGO_PKG_VERSION").to_string()),
+            Some("0.0.1".to_string()),
+            Some("not-a-version".to_string()),
+            None,
+        ] {
+            let mut app = build_app();
+            let (tx, rx) = std::sync::mpsc::channel();
+            app.update_rx = Some(rx);
+            tx.send(result).unwrap();
+            app.poll_update_check();
+            assert_eq!(app.latest_remote, None);
+            assert!(app.last_error.is_none());
+            assert!(app.status_message.is_none());
+        }
+    }
+
+    #[test]
+    fn update_check_waits_without_blocking() {
+        let mut app = build_app();
+        let (_tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+        app.update_rx = Some(rx);
+        app.poll_update_check();
+        assert_eq!(app.latest_remote, None);
+        assert!(app.update_rx.is_some());
     }
 }

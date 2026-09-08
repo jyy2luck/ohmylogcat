@@ -145,6 +145,10 @@ pub struct UiStrings {
     pub status_copy_failed: &'static str,
     pub tip_keyboard_enhancement: &'static str,
 
+    // Status bar version cluster (`{}` = version without leading `v`)
+    pub status_version_current: &'static str,
+    pub status_version_update_suffix: &'static str,
+
     // Devices modal
     pub modal_devices_title: &'static str,
     pub modal_devices_help: &'static str,
@@ -231,6 +235,9 @@ impl UiStrings {
             tip_keyboard_enhancement:
                 "Tip: keyboard enhancement unavailable — use Windows Terminal for full key support",
 
+            status_version_current: "v{}",
+            status_version_update_suffix: " (update {})",
+
             modal_devices_title: " Devices ",
             modal_devices_help: "Select device  (↑↓ · enter · r refresh · esc exit)",
 
@@ -306,6 +313,9 @@ impl UiStrings {
             tip_keyboard_enhancement:
                 "提示: 键盘增强不可用 — 请使用 Windows Terminal 以获得完整按键支持",
 
+            status_version_current: "版本-{}",
+            status_version_update_suffix: "（有更新{}）",
+
             modal_devices_title: " 设备 ",
             modal_devices_help: "选择设备  (↑↓ · Enter · r 刷新 · Esc)",
 
@@ -380,6 +390,9 @@ impl UiStrings {
             status_copy_failed: "複製失敗: {}",
             tip_keyboard_enhancement:
                 "提示: 鍵盤增強不可用 — 請使用 Windows Terminal 以獲得完整按鍵支援",
+
+            status_version_current: "版本-{}",
+            status_version_update_suffix: "（有更新{}）",
 
             modal_devices_title: " 裝置 ",
             modal_devices_help: "選擇裝置  (↑↓ · Enter · r 重新整理 · Esc)",

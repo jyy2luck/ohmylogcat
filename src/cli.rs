@@ -5,7 +5,8 @@ use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const REPO: &str = "jyy2luck/ohmylogcat";
@@ -18,6 +19,9 @@ const INSTALL_PS1_URL: &str =
 const RELEASES_LATEST_URL: &str =
     "https://github.com/jyy2luck/ohmylogcat/releases/latest";
 const INSTALL_RESULT_PREFIX: &str = "ohmylogcat-install-result:";
+/// Hard bound for latest-release discovery so a stalled DNS / proxy cannot
+/// leak a child process for the whole session.
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InstallResult {
@@ -483,19 +487,68 @@ fn select_update_outcome(
     }
 }
 
-fn fetch_latest_release_version() -> Result<String, String> {
+/// Latest GitHub Release version (no leading `v`) via the `releases/latest`
+/// redirect. Shared by the CLI `update` verification and the TUI status-bar
+/// hint; errors are descriptive strings and never panic.
+pub(crate) fn fetch_latest_release_version() -> Result<String, String> {
     let location = resolve_latest_release_location(RELEASES_LATEST_URL)?;
     extract_version_from_release_url(&location).ok_or_else(|| {
         format!("could not parse release tag from redirect URL: {location}")
     })
 }
 
+/// TUI hint only: true when `remote`'s numeric major.minor.patch triple is
+/// greater than `local`'s. Leading `v` and any `-` / `+` suffix on the patch
+/// component are ignored; unparsable input counts as "not newer".
+pub(crate) fn remote_is_newer(local: &str, remote: &str) -> bool {
+    match (version_triple(local), version_triple(remote)) {
+        (Some(local), Some(remote)) => remote > local,
+        _ => false,
+    }
+}
+
+fn version_triple(version: &str) -> Option<(u64, u64, u64)> {
+    let version = version.trim().trim_start_matches(['v', 'V']);
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.split(['-', '+']).next()?.parse().ok()?;
+    Some((major, minor, patch))
+}
+
+/// Run `command` to completion, killing the child after `timeout`.
+/// Stdio is captured like `Command::output()` so the child never writes to
+/// the terminal (the TUI probes run on a background thread).
+fn run_with_timeout(command: &mut Command, timeout: Duration) -> Result<Output, String> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().map_err(|e| e.to_string()),
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("timed out after {}s", timeout.as_secs()));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
+
 /// Follow `releases/latest` redirects and return the final (or Location) URL.
 fn resolve_latest_release_location(url: &str) -> Result<String, String> {
     #[cfg(windows)]
     {
-        let output = Command::new("powershell")
-            .args([
+        let output = run_with_timeout(
+            Command::new("powershell").args([
                 "-NoProfile",
                 "-Command",
                 &format!(
@@ -513,9 +566,10 @@ fn resolve_latest_release_location(url: &str) -> Result<String, String> {
                        }} else {{ throw }} \
                      }}"
                 ),
-            ])
-            .output()
-            .map_err(|e| format!("failed to resolve {url}: {e}"))?;
+            ]),
+            DISCOVERY_TIMEOUT,
+        )
+        .map_err(|e| format!("failed to resolve {url}: {e}"))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(format!("failed to resolve {url}: {stderr}"));
@@ -533,10 +587,11 @@ fn resolve_latest_release_location(url: &str) -> Result<String, String> {
     {
         // Prefer Location from the first hop (no body download); fall back to
         // the effective URL after following redirects.
-        let head = Command::new("curl")
-            .args(["-fsSI", "-H", "User-Agent: ohmylogcat", url])
-            .output()
-            .map_err(|e| format!("failed to resolve {url}: {e}"))?;
+        let head = run_with_timeout(
+            Command::new("curl").args(["-fsSI", "-H", "User-Agent: ohmylogcat", url]),
+            DISCOVERY_TIMEOUT,
+        )
+        .map_err(|e| format!("failed to resolve {url}: {e}"))?;
         if head.status.success() {
             let headers = String::from_utf8_lossy(&head.stdout);
             if let Some(location) = location_header_value(&headers) {
@@ -544,8 +599,8 @@ fn resolve_latest_release_location(url: &str) -> Result<String, String> {
             }
         }
 
-        let output = Command::new("curl")
-            .args([
+        let output = run_with_timeout(
+            Command::new("curl").args([
                 "-fsSL",
                 "-o",
                 "/dev/null",
@@ -554,9 +609,10 @@ fn resolve_latest_release_location(url: &str) -> Result<String, String> {
                 "-H",
                 "User-Agent: ohmylogcat",
                 url,
-            ])
-            .output()
-            .map_err(|e| format!("failed to resolve {url}: {e}"))?;
+            ]),
+            DISCOVERY_TIMEOUT,
+        )
+        .map_err(|e| format!("failed to resolve {url}: {e}"))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(format!("failed to resolve {url}: {stderr}"));
@@ -792,6 +848,111 @@ mod tests {
             extract_version_from_release_url("https://github.com/jyy2luck/ohmylogcat/releases/latest"),
             None
         );
+    }
+
+    #[test]
+    fn extract_version_handles_edge_shapes() {
+        // Tag with suffix is kept as-is here; triple parsing handles it.
+        assert_eq!(
+            extract_version_from_release_url(
+                "https://github.com/jyy2luck/ohmylogcat/releases/tag/v0.7.0-dev"
+            )
+            .as_deref(),
+            Some("0.7.0-dev")
+        );
+        // Empty tag segment does not parse.
+        assert_eq!(
+            extract_version_from_release_url(
+                "https://github.com/jyy2luck/ohmylogcat/releases/tag/"
+            ),
+            None
+        );
+        assert_eq!(extract_version_from_release_url(""), None);
+    }
+
+    #[test]
+    fn remote_is_newer_detects_update() {
+        assert!(remote_is_newer("0.6.0", "0.7.0"));
+        assert!(remote_is_newer("0.6.0", "0.6.1"));
+        assert!(remote_is_newer("0.6.0", "1.0.0"));
+        assert!(remote_is_newer("0.6.0", "v0.7.0"));
+    }
+
+    #[test]
+    fn remote_is_newer_equal_is_not_update() {
+        assert!(!remote_is_newer("0.6.0", "0.6.0"));
+        assert!(!remote_is_newer("v0.6.0", "0.6.0"));
+    }
+
+    #[test]
+    fn remote_is_newer_local_ahead_is_not_update() {
+        assert!(!remote_is_newer("0.7.0", "0.6.0"));
+        // Local pre-release suffix is ignored for the triple: 0.7.0-dev > 0.6.0.
+        assert!(!remote_is_newer("0.7.0-dev", "0.6.0"));
+        // Same triple with local suffix is not an update.
+        assert!(!remote_is_newer("0.7.0-dev", "0.7.0"));
+    }
+
+    #[test]
+    fn remote_is_newer_tolerates_suffixes() {
+        // Remote tag carrying a suffix still compares by its triple.
+        assert!(remote_is_newer("0.6.0", "0.7.0-rc.1"));
+        assert!(remote_is_newer("0.6.0+build", "0.7.0"));
+        assert!(!remote_is_newer("0.7.0+build", "0.7.0"));
+    }
+
+    #[test]
+    fn remote_is_newer_unparsable_is_not_update() {
+        assert!(!remote_is_newer("abc", "0.7.0"));
+        assert!(!remote_is_newer("0.6.0", "not-a-version"));
+        assert!(!remote_is_newer("0.6", "0.7.0"));
+        assert!(!remote_is_newer("", ""));
+    }
+
+    #[cfg(windows)]
+    fn echo_command() -> Command {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", "echo hello"]);
+        cmd
+    }
+
+    #[cfg(not(windows))]
+    fn echo_command() -> Command {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo hello"]);
+        cmd
+    }
+
+    #[cfg(windows)]
+    fn sleep_command() -> Command {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", "ping 127.0.0.1 -n 10 > nul"]);
+        cmd
+    }
+
+    #[cfg(not(windows))]
+    fn sleep_command() -> Command {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 10"]);
+        cmd
+    }
+
+    #[test]
+    fn run_with_timeout_captures_stdout() {
+        // Regression: a bare `spawn()` inherits the terminal stdio, so child
+        // output leaks into the TUI and nothing is captured.
+        let output = run_with_timeout(&mut echo_command(), Duration::from_secs(5)).unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("hello"));
+    }
+
+    #[test]
+    fn run_with_timeout_kills_overtime_command() {
+        let started = Instant::now();
+        let err = run_with_timeout(&mut sleep_command(), Duration::from_millis(500))
+            .unwrap_err();
+        assert!(err.contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]
