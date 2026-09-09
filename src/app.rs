@@ -203,6 +203,8 @@ pub struct OhmylogcatApp {
     locale: Locale,
     ui: UiStrings,
     devices: Vec<Device>,
+    /// Snapshot of the device list from the previous successful refresh.
+    prev_devices: Vec<Device>,
     selected_serial: Option<String>,
     device_cursor: usize,
 
@@ -276,6 +278,7 @@ impl OhmylogcatApp {
             engine,
             event_rx,
             devices: Vec::new(),
+            prev_devices: Vec::new(),
             selected_serial: None,
             device_cursor: 0,
             filter_tag: TextInput::new(),
@@ -2044,6 +2047,56 @@ impl OhmylogcatApp {
         self.seed_or_clamp_caret();
     }
 
+    fn is_valid_device(d: &Device) -> bool {
+        d.state.eq_ignore_ascii_case("device")
+    }
+
+    fn first_valid_device(devices: &[Device]) -> Option<&Device> {
+        devices.iter().find(|d| Self::is_valid_device(d))
+    }
+
+    fn newly_appeared_valid_devices<'a>(
+        previous: &[Device],
+        current: &'a [Device],
+    ) -> Vec<&'a Device> {
+        let prev_serials: std::collections::HashSet<&str> =
+            previous.iter().map(|d| d.serial.as_str()).collect();
+        current
+            .iter()
+            .filter(|d| Self::is_valid_device(d) && !prev_serials.contains(d.serial.as_str()))
+            .collect()
+    }
+
+    fn selected_device_still_valid(&self) -> bool {
+        let Some(serial) = self.selected_serial.as_deref() else {
+            return false;
+        };
+        self.devices
+            .iter()
+            .any(|d| d.serial == serial && Self::is_valid_device(d))
+    }
+
+    fn maybe_auto_connect(&mut self, previous_devices: &[Device]) {
+        if self.engine.is_streaming() {
+            if !self.selected_device_still_valid() {
+                if let Some(device) = Self::first_valid_device(&self.devices) {
+                    self.selected_serial = Some(device.serial.clone());
+                    self.start_selected_device();
+                }
+            }
+        } else if let Some(device) =
+            Self::newly_appeared_valid_devices(previous_devices, &self.devices).into_iter().next()
+        {
+            self.selected_serial = Some(device.serial.clone());
+            self.start_selected_device();
+        } else if self.selected_serial.is_none() {
+            if let Some(device) = Self::first_valid_device(&self.devices) {
+                self.selected_serial = Some(device.serial.clone());
+                self.start_selected_device();
+            }
+        }
+    }
+
     fn refresh_devices(&mut self) {
         self.last_device_refresh = Instant::now();
         match adb::resolve_adb_path(self.settings.adb_path.as_deref()) {
@@ -2054,8 +2107,11 @@ impl OhmylogcatApp {
                 }
                 match adb::list_devices(&path) {
                     Ok(devices) => {
+                        let previous = self.prev_devices.clone();
                         self.devices = devices;
+                        self.prev_devices = self.devices.clone();
                         self.last_error = None;
+                        self.maybe_auto_connect(&previous);
                     }
                     Err(e) => self.last_error = Some(e),
                 }
@@ -3193,6 +3249,7 @@ mod tests {
             locale,
             ui,
             devices: Vec::new(),
+            prev_devices: Vec::new(),
             selected_serial: None,
             device_cursor: 0,
             filter_tag: TextInput::new(),
@@ -3255,6 +3312,21 @@ mod tests {
             tag: "T".into(),
             message: message.into(),
         }
+    }
+
+    fn test_device(serial: &str, state: &str) -> Device {
+        Device {
+            serial: serial.into(),
+            state: state.into(),
+        }
+    }
+
+    /// Simulate a successful device-list refresh without calling adb.
+    fn simulate_device_refresh(app: &mut OhmylogcatApp, new_devices: Vec<Device>) {
+        let previous = app.prev_devices.clone();
+        app.devices = new_devices;
+        app.prev_devices = app.devices.clone();
+        app.maybe_auto_connect(&previous);
     }
 
     /// formatted_line prefix is `{ts} {pid:5} {tid:5} {lvl} {tag}: ` =
@@ -4109,5 +4181,68 @@ mod tests {
         app.poll_update_check();
         assert_eq!(app.latest_remote, None);
         assert!(app.update_rx.is_some());
+    }
+
+    #[test]
+    fn auto_connect_startup_with_empty_list_selects_nothing() {
+        let mut app = build_app();
+        simulate_device_refresh(&mut app, vec![]);
+        assert!(app.selected_serial.is_none());
+        assert!(!app.engine.is_streaming());
+    }
+
+    #[test]
+    fn auto_connect_first_valid_device_while_idle() {
+        let mut app = build_app();
+        simulate_device_refresh(&mut app, vec![test_device("A", "device")]);
+        assert_eq!(app.selected_serial.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn auto_connect_second_device_while_streaming_keeps_selection() {
+        let mut app = build_app();
+        simulate_device_refresh(&mut app, vec![test_device("A", "device")]);
+        app.selected_serial = Some("A".into());
+        *app.engine.is_streaming.lock().unwrap() = true;
+        simulate_device_refresh(
+            &mut app,
+            vec![test_device("A", "device"), test_device("B", "device")],
+        );
+        assert_eq!(app.selected_serial.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn auto_connect_active_removed_falls_back_to_remaining_device() {
+        let mut app = build_app();
+        simulate_device_refresh(
+            &mut app,
+            vec![test_device("A", "device"), test_device("B", "device")],
+        );
+        app.selected_serial = Some("A".into());
+        *app.engine.is_streaming.lock().unwrap() = true;
+        simulate_device_refresh(&mut app, vec![test_device("B", "device")]);
+        assert_eq!(app.selected_serial.as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn auto_connect_reconnects_when_new_device_appears_while_disconnected() {
+        let mut app = build_app();
+        simulate_device_refresh(&mut app, vec![test_device("A", "device")]);
+        *app.engine.is_streaming.lock().unwrap() = false;
+        simulate_device_refresh(&mut app, vec![]);
+        simulate_device_refresh(&mut app, vec![test_device("B", "device")]);
+        assert_eq!(app.selected_serial.as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn disconnect_preserves_log_buffer() {
+        let mut app = build_app();
+        seed(&mut app, &[entry("keep me")]);
+        assert_eq!(app.engine.filtered_len(), 1);
+        app.engine.stop_stream();
+        assert_eq!(app.engine.filtered_len(), 1);
+        app.engine.emit_from(EngineEvent::Error("device disconnected".into()));
+        app.drain_events();
+        assert_eq!(app.engine.filtered_len(), 1);
     }
 }
