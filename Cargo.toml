@@ -1,6 +1,6 @@
 [package]
 name = "ohmylogcat"
-version = "0.8.0"
+version = "0.9.0"
 description = "A lightweight Android Logcat viewer"
 authors = ["jiangyangyang"]
 edition = "2021"
