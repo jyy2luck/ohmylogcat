@@ -3,7 +3,7 @@
 use crate::settings;
 use std::env;
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, ErrorKind, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -547,88 +547,118 @@ fn run_with_timeout(command: &mut Command, timeout: Duration) -> Result<Output, 
 fn resolve_latest_release_location(url: &str) -> Result<String, String> {
     #[cfg(windows)]
     {
-        let output = run_with_timeout(
-            Command::new("powershell").args([
-                "-NoProfile",
-                "-Command",
-                &format!(
-                    "$ProgressPreference='SilentlyContinue'; \
-                     $ErrorActionPreference='Stop'; \
-                     try {{ \
-                       $r = Invoke-WebRequest -Uri '{url}' -MaximumRedirection 0 \
-                         -Headers @{{'User-Agent'='ohmylogcat'}} -UseBasicParsing; \
-                       if ($r.Headers.Location) {{ $r.Headers.Location }} else {{ $r.BaseResponse.ResponseUri.AbsoluteUri }} \
-                     }} catch {{ \
-                       if ($_.Exception.Response -and $_.Exception.Response.Headers['Location']) {{ \
-                         $_.Exception.Response.Headers['Location'] \
-                       }} elseif ($_.Exception.Response -and $_.Exception.Response.Headers.Location) {{ \
-                         $_.Exception.Response.Headers.Location \
-                       }} else {{ throw }} \
-                     }}"
-                ),
-            ]),
-            DISCOVERY_TIMEOUT,
-        )
-        .map_err(|e| format!("failed to resolve {url}: {e}"))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("failed to resolve {url}: {stderr}"));
+        if curl_exe_available() {
+            resolve_latest_release_location_via_curl("curl.exe", "NUL", url)
+        } else {
+            resolve_latest_release_location_powershell(url)
         }
-        let location = String::from_utf8(output.stdout)
-            .map_err(|e| e.to_string())?
-            .trim()
-            .to_string();
-        if location.is_empty() {
-            return Err(format!("empty redirect Location for {url}"));
-        }
-        Ok(location)
     }
     #[cfg(not(windows))]
     {
-        // Prefer Location from the first hop (no body download); fall back to
-        // the effective URL after following redirects.
-        let head = run_with_timeout(
-            Command::new("curl").args(["-fsSI", "-H", "User-Agent: ohmylogcat", url]),
-            DISCOVERY_TIMEOUT,
-        )
-        .map_err(|e| format!("failed to resolve {url}: {e}"))?;
-        if head.status.success() {
-            let headers = String::from_utf8_lossy(&head.stdout);
-            if let Some(location) = location_header_value(&headers) {
-                return Ok(location);
-            }
-        }
-
-        let output = run_with_timeout(
-            Command::new("curl").args([
-                "-fsSL",
-                "-o",
-                "/dev/null",
-                "-w",
-                "%{url_effective}",
-                "-H",
-                "User-Agent: ohmylogcat",
-                url,
-            ]),
-            DISCOVERY_TIMEOUT,
-        )
-        .map_err(|e| format!("failed to resolve {url}: {e}"))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("failed to resolve {url}: {stderr}"));
-        }
-        let location = String::from_utf8(output.stdout)
-            .map_err(|e| e.to_string())?
-            .trim()
-            .to_string();
-        if location.is_empty() {
-            return Err(format!("empty effective URL for {url}"));
-        }
-        Ok(location)
+        resolve_latest_release_location_via_curl("curl", "/dev/null", url)
     }
 }
 
-#[cfg(any(not(windows), test))]
+/// Prefer Location from the first hop (no body download); fall back to the
+/// effective URL after following redirects.
+fn resolve_latest_release_location_via_curl(
+    curl: &str,
+    null_sink: &str,
+    url: &str,
+) -> Result<String, String> {
+    let head = run_with_timeout(
+        Command::new(curl).args(["-fsSI", "-H", "User-Agent: ohmylogcat", url]),
+        DISCOVERY_TIMEOUT,
+    )
+    .map_err(|e| format!("failed to resolve {url}: {e}"))?;
+    if head.status.success() {
+        let headers = String::from_utf8_lossy(&head.stdout);
+        if let Some(location) = location_header_value(&headers) {
+            return Ok(location);
+        }
+    }
+
+    let output = run_with_timeout(
+        Command::new(curl).args([
+            "-fsSL",
+            "-o",
+            null_sink,
+            "-w",
+            "%{url_effective}",
+            "-H",
+            "User-Agent: ohmylogcat",
+            url,
+        ]),
+        DISCOVERY_TIMEOUT,
+    )
+    .map_err(|e| format!("failed to resolve {url}: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("failed to resolve {url}: {stderr}"));
+    }
+    let location = String::from_utf8(output.stdout)
+        .map_err(|e| e.to_string())?
+        .trim()
+        .to_string();
+    if location.is_empty() {
+        return Err(format!("empty effective URL for {url}"));
+    }
+    Ok(location)
+}
+
+#[cfg(windows)]
+fn curl_exe_available() -> bool {
+    match Command::new("curl.exe")
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(mut child) => {
+            let _ = child.wait();
+            true
+        }
+        Err(e) => e.kind() != ErrorKind::NotFound,
+    }
+}
+
+#[cfg(windows)]
+fn windows_powershell_location_script(url: &str) -> String {
+    format!(
+        "$ProgressPreference='SilentlyContinue'; \
+         $ErrorActionPreference='Stop'; \
+         $r = Invoke-WebRequest -Uri '{url}' -Method Head \
+           -Headers @{{'User-Agent'='ohmylogcat'}} -UseBasicParsing; \
+         $r.BaseResponse.ResponseUri.AbsoluteUri"
+    )
+}
+
+#[cfg(windows)]
+fn resolve_latest_release_location_powershell(url: &str) -> Result<String, String> {
+    let output = run_with_timeout(
+        Command::new("powershell").args([
+            "-NoProfile",
+            "-Command",
+            &windows_powershell_location_script(url),
+        ]),
+        DISCOVERY_TIMEOUT,
+    )
+    .map_err(|e| format!("failed to resolve {url}: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("failed to resolve {url}: {stderr}"));
+    }
+    let location = String::from_utf8(output.stdout)
+        .map_err(|e| e.to_string())?
+        .trim()
+        .to_string();
+    if location.is_empty() {
+        return Err(format!("empty redirect Location for {url}"));
+    }
+    Ok(location)
+}
+
 fn location_header_value(headers: &str) -> Option<String> {
     for line in headers.lines() {
         let line = line.trim();
@@ -964,6 +994,14 @@ mod tests {
             location_header_value(headers).as_deref(),
             Some("https://github.com/jyy2luck/ohmylogcat/releases/tag/v0.4.0")
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_powershell_fallback_allows_redirects() {
+        let script = super::windows_powershell_location_script(super::RELEASES_LATEST_URL);
+        assert!(!script.contains("-MaximumRedirection 0"));
+        assert!(script.contains("-Method Head"));
     }
 
     #[test]

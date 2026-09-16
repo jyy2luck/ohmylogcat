@@ -523,7 +523,7 @@ The system SHALL treat the lowercase and uppercase forms of each letter as equiv
 
 ### Requirement: Non-blocking latest-release check in the TUI
 
-When the TUI starts, the system SHALL resolve the latest GitHub Release version without blocking the first paint or log streaming. Discovery SHALL use the public `releases/latest` redirect to a tag URL (or an equivalent non-REST path) and SHALL NOT require unauthenticated access to the GitHub Releases REST API. The system SHALL treat the remote version as newer only when its numeric major.minor.patch triple is greater than the running package version's numeric triple (leading `v` stripped; a local pre-release suffix such as `-dev` is ignored for the triple). The TUI SHALL NOT download a replacement binary, invoke the install script, or otherwise apply an update from inside the TUI. A failed, timed-out, or unparsable discovery SHALL leave the version cluster on current version only and SHALL NOT write a status-bar error for that failure.
+When the TUI starts, the system SHALL resolve the latest GitHub Release version without blocking the first paint or log streaming. Discovery SHALL use the public `releases/latest` redirect to a tag URL (or an equivalent non-REST path) and SHALL NOT require unauthenticated access to the GitHub Releases REST API. On Windows, when that public redirect is reachable, discovery SHALL succeed in resolving a parseable release version; treating the first redirect hop as a hard client error (for example a maximum-redirection-exceeded failure from a no-follow request) SHALL NOT by itself count as discovery failure. The system SHALL treat the remote version as newer only when its numeric major.minor.patch triple is greater than the running package version's numeric triple (leading `v` stripped; a local pre-release suffix such as `-dev` is ignored for the triple). The TUI SHALL NOT download a replacement binary, invoke the install script, or otherwise apply an update from inside the TUI. A failed, timed-out, or unparsable discovery SHALL leave the version cluster on current version only and SHALL NOT write a status-bar error for that failure.
 
 #### Scenario: First paint does not wait for GitHub
 
@@ -549,3 +549,8 @@ When the TUI starts, the system SHALL resolve the latest GitHub Release version 
 
 - **WHEN** a newer GitHub Release is known while the TUI is running
 - **THEN** the process does not replace its own binary or run the platform install script as a result of that knowledge
+
+#### Scenario: Windows shows the update suffix when GitHub is reachable
+
+- **WHEN** the user launches the TUI on Windows, the public `releases/latest` redirect is reachable, and the latest GitHub Release version's numeric triple is greater than the running package version
+- **THEN** latest-release discovery succeeds and the status bar version cluster gains the localized update suffix for that remote version
