@@ -16,11 +16,16 @@ The system SHALL run as a single-process terminal application using a TUI framew
 
 ### Requirement: Top-layer quit shortcut
 
-The system SHALL quit the application when the user presses `q` or `Q` without Control modifier only on the top layer, defined as no modal open and the find bar not open. The system SHALL NOT treat Ctrl+C as a quit shortcut.
+The system SHALL quit the application when the user presses `q` or `Q` without Control modifier only on the top layer, defined as no modal open and the find input not focused. A visible find bar with focus on the log viewport or Level control remains the top layer. The system SHALL NOT treat Ctrl+C as a quit shortcut.
 
 #### Scenario: Quit from main shell
 
-- **WHEN** no modal is open, the find bar is closed, and the user presses `q`
+- **WHEN** no modal is open, the find input is not focused, and the user presses `q`
+- **THEN** the application exits and restores the terminal
+
+#### Scenario: Quit with find bar open after logs regain focus
+
+- **WHEN** the find bar is open, no modal is open, focus is on the log viewport, and the user presses `q`
 - **THEN** the application exits and restores the terminal
 
 #### Scenario: Ctrl+C does not quit
@@ -30,12 +35,12 @@ The system SHALL quit the application when the user presses `q` or `Q` without C
 
 #### Scenario: Quit blocked on overlay layer
 
-- **WHEN** any modal is open or the find bar is open and the user presses `q`
+- **WHEN** any modal is open or the find input is focused and the user presses `q`
 - **THEN** the application does not quit
 
 #### Scenario: q inserts in text overlay
 
-- **WHEN** a modal with a text input field is open (filter edit, export path, or settings text field) or the find bar is open, and the user presses `q`
+- **WHEN** a modal with a text input field is open (filter edit, export path, or settings text field) or the find input is focused, and the user presses `q`
 - **THEN** the character is inserted into the active text input and the application does not quit
 
 #### Scenario: q no-op on non-text overlay

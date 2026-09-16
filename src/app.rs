@@ -443,7 +443,7 @@ impl OhmylogcatApp {
     }
 
     fn is_top_layer(&self) -> bool {
-        self.modal.is_none() && !self.find.open
+        self.modal.is_none() && !(self.find.open && self.focus == Focus::Find)
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
@@ -3694,6 +3694,59 @@ mod tests {
             KeyModifiers::CONTROL,
         ));
         assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn q_quits_when_find_bar_is_open_but_logs_are_focused() {
+        let mut app = build_app();
+        app.find.open = true;
+        app.find.input.text = "needle".into();
+        app.focus = Focus::Logs;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()));
+
+        assert!(app.should_quit);
+        assert!(app.find.open);
+    }
+
+    #[test]
+    fn q_inserts_into_find_and_does_not_quit_when_find_is_focused() {
+        let mut app = build_app();
+        app.find.open = true;
+        app.find.input.text = "nee".into();
+        app.find.input.set_cursor_end();
+        app.focus = Focus::Find;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()));
+
+        assert!(!app.should_quit);
+        assert_eq!(app.find.input.text, "neeq");
+        assert!(app.find.open);
+    }
+
+    #[test]
+    fn clicking_logs_while_find_open_then_q_quits() {
+        let mut app = build_app();
+        seed(&mut app, &[entry("hello")]);
+        app.find.open = true;
+        app.find.input.text = "hel".into();
+        app.focus = Focus::Find;
+        app.hit_map.log_viewport = Some(Rect::new(0, 0, 80, 10));
+        app.viewport_height = 10;
+        app.viewport_width = 80;
+
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::empty(),
+        });
+
+        assert_eq!(app.focus, Focus::Logs);
+        assert!(app.find.open);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()));
+        assert!(app.should_quit);
     }
 
     #[test]

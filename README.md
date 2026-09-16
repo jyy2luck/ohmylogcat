@@ -187,7 +187,7 @@ Text-input fields preserve the original character case.
 
 | Shortcut | Context | Action |
 |----------|---------|--------|
-| `q` / `Q` | Top layer (no modal, Find closed) | Quit and restore the terminal |
+| `q` / `Q` | Top layer (no modal, Find not focused) | Quit and restore the terminal |
 | `Space` | Logs | Pause or resume display |
 | `c` | Logs | Clear the buffer |
 | `f` | Logs | Toggle Follow (tail) |
